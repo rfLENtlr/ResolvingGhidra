@@ -130,6 +130,7 @@ class ResolvingGhidra():
         
                 self.emuHelper.writeMemory(string_address, api_name.encode())
 
+                # todo : identify register used to store string address
                 # write EDX to string_address
                 self.emuHelper.writeRegister("EDX", string_address.getOffset())
 
