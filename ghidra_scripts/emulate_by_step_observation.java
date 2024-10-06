@@ -6,6 +6,8 @@
 //@toolbar 
 
 import java.util.List;
+import java.util.Objects;
+import java.util.HashMap;
 
 import ghidra.app.emulator.EmulatorHelper;
 import ghidra.app.script.GhidraScript;
@@ -17,7 +19,8 @@ import ghidra.program.model.pcode.*;
 import ghidra.program.model.data.ISF.*;
 import ghidra.program.model.util.*;
 import ghidra.sleigh.grammar.SleighEcho.endian_return;
-import jnr.ffi.types.off_t;
+import ghidra.sleigh.grammar.SleighParser.oplist_return;
+import ghidra.sleigh.grammar.SleighParser_SemanticParser.return_stmt_return;
 import ghidra.program.model.reloc.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.block.*;
@@ -27,7 +30,10 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.address.*;
 import ghidra.program.flatapi.FlatProgramAPI;
 
+
 public class emulate_by_step_observation extends GhidraScript {
+
+    public static int x86 = 8;
 
     public class EmulationManager {
         private EmulatorHelper emu;
@@ -71,17 +77,104 @@ public class emulate_by_step_observation extends GhidraScript {
                 println("The instruction does not have a first operand.");
             }
             return registerName;
+        } 
+    }
+
+    public class hashvaluesAnalyzer {
+        private Program program;
+        private HashMap<Address, Long> hashValues = new HashMap<>();
+
+        public hashvaluesAnalyzer(Program program) {
+            this.program = program;
         }
 
-        // public boolean isRegister(Address address) {
-        //     Instruction instr = getInstructionAt(address);
-        //     if (instr == null) {
-        //         throw new RuntimeException("No instruction at the specified address.");
-        //     }
-        //     int operandIndex = 0;
-        // }
+        public HashMap<Scalar, Address> analyzeAllInstructions() {
+            HashMap<Scalar, Address> hashVaules = new HashMap<>();
+
+            Listing listing = this.program.getListing();
+            InstructionIterator instructions = listing.getInstructions(true);
+
+            while (instructions.hasNext()){
+                Instruction instr = instructions.next();
+                int opCount = instr.getNumOperands();
+                Address currentAddress = instr.getAddress();
+                // if (instr.getAddress().toString().equals("00401345")){    
+                
+                // println("[+] current: " + instr.getAddress().toString());
+
+                for (int i = 0; i < opCount; i++) {
+                    int opType = instr.getOperandType(i);
+                    if (OperandType.isScalar(opType)) {
+                        Scalar scalar = instr.getScalar(i);
+                        if (scalar.toString().length() == 10) {
+                            // println("scalar: " + scalar.toString());
+                            hashVaules.put(scalar, currentAddress);
+                        }
+                        // println("scalar: " + scalar.toString());
+                    } else if (OperandType.isDataReference(opType)) {
+                        Reference ref = instr.getPrimaryReference(i);
+                        if (ref.isMemoryReference()) {
+                            Address toAddr = ref.getToAddress();
+                            Data data = listing.getDefinedDataAt(toAddr);
+                            if (data != null && data.getValue() != null) {
+                                Object value = data.getValue();
+                                if (value instanceof Scalar) {
+                                    Scalar dat_value = (Scalar) value;
+                                    if (dat_value.toString().length() == 10) {
+                                        // println("data scalar: " + dat_value.toString());
+                                        hashVaules.put(dat_value, currentAddress);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return hashVaules;
+        }
+        // this implementation is not perfect, because hash value is passed by parameter. must chase the value
+        public void analyzeInstructions(Address startAddress, Address endAddress) {
+            Listing listing = this.program.getListing();
+            AddressSetView addressSet = new AddressSet(startAddress, endAddress);
+            InstructionIterator instructions = listing.getInstructions(addressSet, true);
+            // 関数呼び出しやJMP先には対応していない
+            // check operand, and if it is scalar, get the value, and if it is DAT , refer to and get the value
+            while(instructions.hasNext()) {
+                Instruction instr = instructions.next();
+                Address currentAddress = instr.getAddress();
+                println("current: " + currentAddress.toString());
+                int numOperands = instr.getNumOperands();
+                for (int i = 0; i < numOperands; i++) {
+                    int operandType = instr.getOperandType(i);
+                    if (OperandType.isScalar(operandType)) {
+                        Scalar scalar = instr.getScalar(i);
+                        println("scalar: " + scalar.toString());
+                        hashValues.put(currentAddress, scalar.getValue());
+                    } else if (OperandType.isDataReference(operandType)) {
+                        println("data");
+                        Reference ref = instr.getPrimaryReference(i);
+                        if (ref.isMemoryReference()) {
+                            // get values from memory
+                            Address toAddr = ref.getToAddress();
+                            println("toAddr: " + toAddr.toString());
+                            Data data = listing.getDefinedDataAt(toAddr);
+                            if (data != null) {
+                                println("data scalar: " + data.getValue().toString());
+                            }
+                        }
+                    } else {
+                        // 512: register such as EDX
+                        // 4194304(DYNAMIC): dword ptr [ECX + EAX*0x4]
+                        // 4202496(): dword ptr [EBP + local_14]
+                        println("operand type: " + Integer.toHexString(operandType));
+                    }
+                }
+            }
 
 
+        }
+
+        
     }
 
 
@@ -89,15 +182,28 @@ public class emulate_by_step_observation extends GhidraScript {
     protected void run() throws Exception {
 
         /* setup env from DBI information */
-        Address startAddress = toAddr(0x40131e);
+        // Address startAddress = toAddr(0x40131e);
         // Address startAddress = toAddr(0x401342);
         // below is conti
-        // Address startAddress = toAddr(0x4033f2);        
+        Address startAddress = toAddr(0x4033f2);        
 
-        Address endAddress = toAddr(0x401349);
+        // Address endAddress = toAddr(0x401349);
+        // Address endAddress = toAddr(0x401353);
         // below is conti
-        // Address endAddress = toAddr(0x403413);
+        Address endAddress = toAddr(0x403413);
+        hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
+        // hashAnalyzer.analyzeInstructions(startAddress, endAddress);
+        HashMap<Scalar, Address> hashValues = hashAnalyzer.analyzeAllInstructions();
+
+        for (Scalar scalar : hashValues.keySet()) {
+            println("hash_candidate: " + scalar+ " -> Address: " + hashValues.get(scalar));
+        }
+
+        if (true) {
+            throw new RuntimeException("end");
+        }
         
+
         /* analyze memory-access instruction */
         InstructionAnalyzer analyzer = new InstructionAnalyzer(currentProgram);
         String dstRegisterAtStart = analyzer.getRegister(startAddress, 0);
@@ -111,7 +217,7 @@ public class emulate_by_step_observation extends GhidraScript {
 
         /* setup emulation helper */
         EmulatorHelper emu = new EmulatorHelper(currentProgram);
-        String apiName = "CreateThreadg";
+        String apiName = "CreateThread";
         emu.setBreakpoint(endAddress);
         // initialize memory at stringAddress
         Address stringAddress = toAddr(0xa00000);
@@ -137,16 +243,6 @@ public class emulate_by_step_observation extends GhidraScript {
                 printReg(emu, secondReg);
             }
 
-        //     else if ((instr.getOperandType(0) & OperandType.DYNAMIC) != 0) {
-        //         // printMem(emu);
-        //         /* read stack address and read bytes from memory */
-        //         Varnode[] inputs = instr.getPcode()[0].getInputs();
-        //         for (Varnode input: inputs) {
-        //             println("input: " + input.toString());
-        //             if (input.)
-        //         }
-
-        //    }
             if (emu.getEmulateExecutionState() != EmulateExecutionState.BREAKPOINT){
                 emu.step(monitor);
             }
