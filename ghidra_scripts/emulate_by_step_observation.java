@@ -26,6 +26,7 @@ import ghidra.program.model.util.*;
 import ghidra.sleigh.grammar.SleighEcho.endian_return;
 import ghidra.sleigh.grammar.SleighParser.oplist_return;
 import ghidra.sleigh.grammar.SleighParser_SemanticParser.return_stmt_return;
+import ghidra.util.exception.CancelledException;
 import ghidra.program.model.reloc.*;
 import ghidra.program.model.data.*;
 import ghidra.program.model.block.*;
@@ -41,19 +42,6 @@ import ghidra.app.decompiler.*;
 public class emulate_by_step_observation extends GhidraScript {
 
     public static int x86 = 8;
-
-    public class EmulationManager {
-        private EmulatorHelper emu;
-        private Address startAddress;
-        private Address endAddress;
-
-        public EmulationManager(Program program, Address startAddress, Address endAddress) {
-            this.emu = new EmulatorHelper(program);
-            this.startAddress = startAddress;
-            this.endAddress = endAddress;
-        }
-
-    }
 
     public class InstructionAnalyzer {
         private Program program;
@@ -403,7 +391,6 @@ public class emulate_by_step_observation extends GhidraScript {
 
             return scalarList;
         }
-
         
         private List<Scalar> getScalarFromInstruction(Instruction instr) {
             List<Scalar> scalarList = new ArrayList<>();
@@ -484,6 +471,80 @@ public class emulate_by_step_observation extends GhidraScript {
         }
     }
 
+    public class EmulationManager {
+        private EmulatorHelper emu;
+        private Address startAddress;
+        private Address endAddressOfHashing;
+        private String regAtStart;
+        private String regStoredHash;
+
+        public EmulationManager(Program program, Address startAddress) {
+            this.emu = new EmulatorHelper(program);
+            this.startAddress = startAddress;
+            this.endAddressOfHashing = null;
+            this.regStoredHash = null;
+
+            analyzeRegAtStart();
+            emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
+        }
+
+        private void analyzeRegAtStart() {
+            Instruction instr = getInstructionAt(this.startAddress);
+            if (instr == null) {
+                throw new RuntimeException("No instruction at the specified address.");
+            }
+            String registerName = null;
+            int operandType = instr.getOperandType(0);
+            if (OperandType.isRegister(operandType)) registerName = instr.getDefaultOperandRepresentation(0);
+            if (registerName == null) {
+                throw new RuntimeException("No register at the specified address.");
+            }
+            this.regAtStart = registerName;
+        }
+
+        private void identifyRangeOfHashing(String apiName, HashMap<Address, List<Scalar>> hashCandidates) {
+            Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
+            // emu.setBreakpoint(retAddress);
+
+            Address stringAddress = toAddr(0xa00000);
+            emu.writeMemoryValue(stringAddress, 0x32, 0x00);
+            emu.writeMemory(stringAddress, apiName.getBytes());        
+            emu.writeRegister(regAtStart, stringAddress.getOffset());
+
+
+            String regName = null;
+            boolean hashFound = false;
+            while(!monitor.isCancelled()) {
+                currentAddress = emu.getExecutionAddress();
+                Instruction instr = getInstructionAt(currentAddress);
+                println("current: " + currentAddress.toString());
+                int numOperands = instr.getNumOperands();
+                for (int i=0; i<numOperands; i++) {
+                    if(OperandType.isRegister(instr.getOperandType(i))) {
+                        regName = instr.getDefaultOperandRepresentation(i);
+                        printReg(emu, regName);
+                        if (checkHash(emu, regName, hashCandidates)) {
+                            this.regStoredHash = regName;
+                            this.endAddressOfHashing = currentAddress;
+                            hashFound = true;
+                            break;
+                        }
+                    }    
+                }
+
+                // if currentAddress doesn't reach to retAddress, or hash value is found, continue
+                if (currentAddress == retAddress || hashFound) break;
+                
+                try {
+                    emu.step(monitor);
+                } catch (CancelledException e) {
+                    println("Emulation step was cancelled: " + e.getMessage());
+                    break;
+                }
+
+            }
+        }
+    }
 
     @Override
     protected void run() throws Exception {
@@ -494,77 +555,45 @@ public class emulate_by_step_observation extends GhidraScript {
         // Address startAddress = toAddr(0x4033f2);        
 
         // Address endAddress = toAddr(0x401349);
-        Address endAddress = toAddr(0x401353);
+        Address endAddress = toAddr(0x401357);
         // below is conti
         // Address endAddress = toAddr(0x403413);
 
+        // Address maxAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
+
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
-        hashAnalyzer.analyzeInstructions(startAddress, endAddress);
+        HashMap<Address, List<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(startAddress, endAddress);
 
-        if (true) {
-            throw new RuntimeException("end");
+        // if (true) {
+        //     throw new RuntimeException("end");
+        // }
+
+        // HashMap<Scalar, Address> hashCandidates = hashAnalyzer.analyzeAllInstructions();
+
+        for (Address addr : hashCandidates.keySet()) {
+            println("Address: " + addr.toString());
+            for (Scalar scalar : hashCandidates.get(addr)) {
+                println("scalar: " + scalar.toString());
+            }
         }
-
-        HashMap<Scalar, Address> hashCandidates = hashAnalyzer.analyzeAllInstructions();
-
-        for (Scalar scalar : hashCandidates.keySet()) {
-            println("hash_candidate: " + scalar + " -> Address: " + hashCandidates.get(scalar));
-        }
-
-        
 
         /* analyze memory-access instruction */
         InstructionAnalyzer analyzer = new InstructionAnalyzer(currentProgram);
         String dstRegisterAtStart = analyzer.getRegister(startAddress, 0);
-        // String startRegister = getRegister(startAddress);
+        // if dstRegister is null, then the program will be cancelled
         if (dstRegisterAtStart == null) {
             throw new RuntimeException("register is null?");
         }
-        else {
-            println("reg: " + dstRegisterAtStart + " at: " + startAddress.toString());
-        }
 
-        /* setup emulation helper */
-        EmulatorHelper emu = new EmulatorHelper(currentProgram);
-        String apiName = "CreateThread";
-        emu.setBreakpoint(endAddress);
-        // initialize memory at stringAddress
-        Address stringAddress = toAddr(0xa00000);
-        emu.writeMemoryValue(stringAddress, 0x32, 0x00);
-        // emu.writeMemory(stringAddress, "CreateThread".getBytes());
-        emu.writeMemory(stringAddress, apiName.getBytes());        
-        emu.writeRegister(dstRegisterAtStart, stringAddress.getOffset());
-        emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
+        /* identify ranges of Hashing by step emulating */
+        EmulationManager emuManager = new EmulationManager(currentProgram, startAddress);
+        emuManager.identifyRangeOfHashing("CreateThread", hashCandidates);
+        println("[!] regStoredHash: " + emuManager.regStoredHash);
+        println("[!] start: " + emuManager.startAddress.toString());
+        println("[!] end: " + emuManager.endAddressOfHashing.toString());
+
         
-        String firstReg = null;
-        String secondReg = null;
-        while(!monitor.isCancelled()){
-            currentAddress = emu.getExecutionAddress();
-            Instruction instr = getInstructionAt(currentAddress);
-            // if first operand is register
-            println("current: " + currentAddress.toString());
-            if((instr.getOperandType(0) & OperandType.REGISTER) != 0) {
-                firstReg = analyzer.getRegister(currentAddress, 0);
-                printReg(emu, firstReg);
-                if (checkHash(emu, firstReg, hashCandidates)) {
-                    break;
-                }
-            }
-            if((instr.getOperandType(1) & OperandType.REGISTER) != 0) {
-                secondReg = analyzer.getRegister(currentAddress, 1);
-                printReg(emu, secondReg);
-                if (checkHash(emu, secondReg, hashCandidates)) {
-                    break;
-                }
-            }
 
-            if (emu.getEmulateExecutionState() != EmulateExecutionState.BREAKPOINT){
-                emu.step(monitor);
-            }
-            else {
-                break;
-            }
-        }
     
     }
 
@@ -585,16 +614,26 @@ public class emulate_by_step_observation extends GhidraScript {
         println(reg + ": 0x" + emu.readRegister(reg).toString(16));
     }
 
-    public boolean checkHash(EmulatorHelper emu, String reg, HashMap<Scalar, Address> candidates) {
+    public boolean checkHash(EmulatorHelper emu, String reg, HashMap<Address, List<Scalar>> candidates) {
         BigInteger result = emu.readRegister(reg);
-        for (Scalar scalar : candidates.keySet()) {
-            // long to BigInteger
-            BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
-            if (result.equals(hashValue)) {
-                println("hash value found: " + scalar + " -> Address: " + candidates.get(scalar));
-                return true;
+        for (Address addr : candidates.keySet()) {
+            for (Scalar scalar : candidates.get(addr)) {
+                // long to BigInteger
+                BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
+                if (result.equals(hashValue)) {
+                    println("hash value found: " + scalar + " -> Address: " + addr);
+                    return true;
+                }
             }
         }
+        // for (Scalar scalar : candidates.keySet()) {
+        //     // long to BigInteger
+        //     BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
+        //     if (result.equals(hashValue)) {
+        //         println("hash value found: " + scalar + " -> Address: " + candidates.get(scalar));
+        //         return true;
+        //     }
+        // }
         return false;
 
     }
