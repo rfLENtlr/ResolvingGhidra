@@ -12,6 +12,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.io.FileReader;
+import java.io.BufferedReader;
+import java.io.IOException;
 
 import ghidra.app.emulator.EmulatorHelper;
 import ghidra.app.plugin.processors.sleigh.pattern.OrPattern;
@@ -544,6 +547,38 @@ public class emulate_by_step_observation extends GhidraScript {
 
             }
         }
+
+        private BigInteger caliculateHashValue(String apiName) {
+            BigInteger hash = null;
+            emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
+            emu.setBreakpoint(this.endAddressOfHashing);
+
+            Address stringAddress = toAddr(0xa00000);
+            emu.writeMemoryValue(stringAddress, 0x32, 0x00);
+            emu.writeMemory(stringAddress, apiName.getBytes());
+            emu.writeRegister(regAtStart, stringAddress.getOffset());
+
+            while(!monitor.isCancelled()) {
+                currentAddress = emu.getExecutionAddress();
+
+                if (emu.getEmulateExecutionState() != EmulateExecutionState.BREAKPOINT) {
+                    try {
+                        emu.step(monitor);
+                    } catch (CancelledException e) {
+                        println("Emulation step was cancelled: " + e.getMessage());
+                        break;
+                    }
+                }
+                else {
+                    hash = emu.readRegister(this.regStoredHash);
+                    break;
+                }
+
+            }
+
+            return hash;
+
+        }
     }
 
     @Override
@@ -592,9 +627,20 @@ public class emulate_by_step_observation extends GhidraScript {
         println("[!] start: " + emuManager.startAddress.toString());
         println("[!] end: " + emuManager.endAddressOfHashing.toString());
 
-        
+        /* parse json */
+        String filePath = "dlls/exports.json"; // JSONファイルのパス
+        HashMap<String, List<String>> dllApiMap = readDBJson(filePath);
 
-    
+        println("size: " + dllApiMap.size());
+        // 格納したDLL名とAPI名を表示
+        for (String dll: dllApiMap.keySet()) {
+            // println("DLL: " + dll);
+            for (String api: dllApiMap.get(dll)) {
+                BigInteger hash = emuManager.caliculateHashValue(api);
+                println("  API: " + api + " -> hash: " + hash.toString(16));
+            }
+                // println("  API: " + api);
+        }
     }
 
     // public void printReg(EmulatorHelper emu) {
@@ -626,16 +672,38 @@ public class emulate_by_step_observation extends GhidraScript {
                 }
             }
         }
-        // for (Scalar scalar : candidates.keySet()) {
-        //     // long to BigInteger
-        //     BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
-        //     if (result.equals(hashValue)) {
-        //         println("hash value found: " + scalar + " -> Address: " + candidates.get(scalar));
-        //         return true;
-        //     }
-        // }
-        return false;
 
+        return false;
+    }
+
+    public HashMap<String, List<String>> readDBJson(String filePath) {
+        HashMap<String, List<String>> dllApiMap = new HashMap<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            String currentDLL = null;
+
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+
+                if (line.startsWith("\"") && line.contains(".dll")) {
+                    int startQuote = line.indexOf('"');
+                    int endQuote = line.indexOf('"', startQuote + 1);
+                    currentDLL = line.substring(startQuote + 1, endQuote);
+                    dllApiMap.put(currentDLL, new ArrayList<>());
+                }
+
+                if (line.startsWith("\"") && currentDLL != null) {
+                    int startQuote = line.indexOf('"');
+                    int endQuote = line.indexOf('"', startQuote + 1);
+                    String apiName = line.substring(startQuote + 1, endQuote);
+                    dllApiMap.get(currentDLL).add(apiName);
+                }
+            }
+        } catch (IOException e) {
+            println("Failed to read the file: " + e.getMessage());
+        }
+
+        return dllApiMap;
     }
     
 
