@@ -6,6 +6,9 @@
 //@toolbar 
 
 import java.util.List;
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Objects;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,17 +17,24 @@ import java.util.Iterator;
 import java.io.FileReader;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import ghidra.app.emulator.EmulatorHelper;
+
 import ghidra.app.script.GhidraScript;
 import ghidra.pcode.emulate.EmulateExecutionState;
+
 import ghidra.program.model.lang.*;
 import ghidra.program.model.pcode.*;
+
 import ghidra.util.exception.CancelledException;
+
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.scalar.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.address.*;
+import ghidra.program.flatapi.FlatProgramAPI;
 import ghidra.app.decompiler.*;
 
 
@@ -50,13 +60,6 @@ public class emulate_by_step_observation extends GhidraScript {
             if (instr.getNumOperands() > operandIndex) {
                 int operandType = instr.getOperandType(operandIndex);
                 registerName = instr.getDefaultOperandRepresentation(operandIndex);
-                if ((operandType & OperandType.REGISTER) != 0) {
-                    println("The first operand is a register: " + registerName);
-                } else if ((operandType & OperandType.DYNAMIC) != 0) {
-                    println("The first operand is dynamic: " + registerName);
-                } else {
-                    println("The first operand is of another type: " + registerName + ", type: " + operandType);
-                }
             } else {
                 println("The instruction does not have a first operand.");
             }
@@ -179,7 +182,7 @@ public class emulate_by_step_observation extends GhidraScript {
                 // println("pcode: " + pcode.toString());
                 Varnode var = pcode.getInput(index);
                 String varName = var.getHigh().getName();
-                println("varName: " + varName);
+                // println("varName: " + varName);
                 // check name starts with param, and get the index of param (for instance, param_1 -> 1)
                 int paramIndex = -1;
                 if (!varName.startsWith("param")) {
@@ -187,7 +190,7 @@ public class emulate_by_step_observation extends GhidraScript {
                     return null;
                 }
                 paramIndex = Integer.parseInt(varName.substring(6));
-                println("paramIndex: " + paramIndex);
+                // println("paramIndex: " + paramIndex);
                 Reference [] callers = getReferencesTo(highFunction.getFunction().getEntryPoint());
                 for (Reference caller : callers) {
                     // println("caller: " + caller.toString());
@@ -199,14 +202,14 @@ public class emulate_by_step_observation extends GhidraScript {
                         // ignore anything other than "CALL"
                         PcodeOpAST callerPcode = callerPcodeOps.next();
                         if (!callerPcode.getMnemonic().equals("CALL")) continue;
-                        println("callerPcode: " + callerPcode.toString());
+                        // println("callerPcode: " + callerPcode.toString());
                         int numParam = callerPcode.getNumInputs();
                         if (numParam <= paramIndex) continue;
                         Varnode varParam = callerPcode.getInput(paramIndex);
-                        println("varParam: " + varParam.toString());
+                        // println("varParam: " + varParam.toString());
                         Address varParamAddr = varParam.getPCAddress();
                         Instruction ins = getInstructionAt(varParamAddr);
-                        println("opRef" + ins.getOperandRefType(1));
+                        // println("opRef" + ins.getOperandRefType(1));
                         Reference ref = ins.getPrimaryReference(1);
                         if (ref == null) continue;
                         Address toAddr = ref.getToAddress();
@@ -216,7 +219,7 @@ public class emulate_by_step_observation extends GhidraScript {
                             if (data.getValue() instanceof Scalar) {
                                 Scalar scalarAtMemory = (Scalar) data.getValue();
                                 if (scalarAtMemory.getValue() == 0) break;
-                                println("scalarAtMemory: " + scalarAtMemory.toString());
+                                // println("scalarAtMemory: " + scalarAtMemory.toString());
                                 // return scalarAtMemory
                             }
                         }
@@ -506,13 +509,14 @@ public class emulate_by_step_observation extends GhidraScript {
             while(!monitor.isCancelled()) {
                 currentAddress = emu.getExecutionAddress();
                 Instruction instr = getInstructionAt(currentAddress);
-                println("current: " + currentAddress.toString());
+                // println("current: " + currentAddress.toString());
                 int numOperands = instr.getNumOperands();
                 for (int i=0; i<numOperands; i++) {
                     if(OperandType.isRegister(instr.getOperandType(i))) {
                         regName = instr.getDefaultOperandRepresentation(i);
-                        printReg(emu, regName);
+                        // printReg(emu, regName);
                         if (checkHash(emu, regName, hashCandidates)) {
+                            println("[+] First Emulation, result equals hashCandidate: 0x" + emu.readRegister(regName).toString(16) + " -> address: " + currentAddress);
                             this.regStoredHash = regName;
                             this.endAddressOfHashing = currentAddress;
                             hashFound = true;
@@ -576,7 +580,7 @@ public class emulate_by_step_observation extends GhidraScript {
         // Address startAddress = toAddr(0x4033f2);        
 
         // Address endAddress = toAddr(0x401349);
-        Address endAddress = toAddr(0x401357);
+        Address endAddress = toAddr(0x401358);
         // below is conti
         // Address endAddress = toAddr(0x403413);
 
@@ -591,12 +595,19 @@ public class emulate_by_step_observation extends GhidraScript {
 
         // HashMap<Scalar, Address> hashCandidates = hashAnalyzer.analyzeAllInstructions();
 
+        // print hashCandidtates like [0x10000, 0x300000, ...]
+        
+
+
+        List<String> candidates = new ArrayList<String>();
         for (Address addr : hashCandidates.keySet()) {
-            println("Address: " + addr.toString());
+            // println("Address: " + addr.toString());
             for (Scalar scalar : hashCandidates.get(addr)) {
-                println("scalar: " + scalar.toString());
+                candidates.add(scalar.toString());
             }
         }
+        println("[+] hashCandidates: " + Arrays.toString(candidates.toArray()));
+
 
         /* analyze memory-access instruction */
         InstructionAnalyzer analyzer = new InstructionAnalyzer(currentProgram);
@@ -609,26 +620,35 @@ public class emulate_by_step_observation extends GhidraScript {
         /* identify ranges of Hashing by step emulating */
         EmulationManager emuManager = new EmulationManager(currentProgram, startAddress);
         emuManager.identifyRangeOfHashing("CreateThread", hashCandidates);
-        println("[!] regStoredHash: " + emuManager.regStoredHash);
-        println("[!] start: " + emuManager.startAddress.toString());
-        println("[!] end: " + emuManager.endAddressOfHashing.toString());
+        // println("[!] regStoredHash: " + emuManager.regStoredHash);
+        // println("[!] start: " + emuManager.startAddress.toString());
+        // println("[!] end: " + emuManager.endAddressOfHashing.toString());
 
         /* parse json */
         String dir = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
-        println("dir: " + dir);
-        String filePath = dir + "/dlls/exports.json"; // JSONファイルのパス
+        // String filePath = dir + "\\dlls\\exports.json";
+        String filePath = dir + "/dlls/exports.json";
         HashMap<String, List<String>> dllApiMap = readDBJson(filePath);
-
-        println("size: " + dllApiMap.size());
-        // 格納したDLL名とAPI名を表示
+        
+        println("[+] now caliculating hash values...");
+        HashMap<String, BigInteger> hashDB = new HashMap<>();
+        // println("size: " + dllApiMap.size());
         for (String dll: dllApiMap.keySet()) {
             // println("DLL: " + dll);
             for (String api: dllApiMap.get(dll)) {
                 BigInteger hash = emuManager.caliculateHashValue(api);
-                println("  API: " + api + " -> hash: " + hash.toString(16));
+                hashDB.put(api, hash);
+                // println("  API: " + api + " -> hash: " + hash.toString(16));
             }
                 // println("  API: " + api);
         }
+        println("[+] caliculation done!");
+
+        println("[+] now resolving API names from hash values...");
+        searchHashValues(hashDB, hashCandidates);
+
+
+
     }
 
     // public void printReg(EmulatorHelper emu) {
@@ -655,7 +675,7 @@ public class emulate_by_step_observation extends GhidraScript {
                 // long to BigInteger
                 BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
                 if (result.equals(hashValue)) {
-                    println("hash value found: " + scalar + " -> Address: " + addr);
+                    // println("[+] First Emulation, hash value found: " + scalar + " -> Address: " + addr);
                     return true;
                 }
             }
@@ -693,6 +713,17 @@ public class emulate_by_step_observation extends GhidraScript {
 
         return dllApiMap;
     }
-    
+
+    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates) {
+        for (Address addr : hashCandidates.keySet()) {
+            for (Scalar scalar : hashCandidates.get(addr)) {
+                for (String api : hashDB.keySet()) {
+                    if (hashDB.get(api).equals(BigInteger.valueOf(scalar.getValue()))) {
+                        println("[+] API: " + api + " -> hash: 0x" + hashDB.get(api).toString(16) + " -> Address: " + addr);
+                    }
+                }
+            }
+        }
+    }
 
 }
