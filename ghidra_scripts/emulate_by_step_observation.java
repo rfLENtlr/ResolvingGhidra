@@ -6,7 +6,6 @@
 //@toolbar 
 
 import java.util.List;
-import java.util.Objects;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,28 +16,15 @@ import java.io.BufferedReader;
 import java.io.IOException;
 
 import ghidra.app.emulator.EmulatorHelper;
-import ghidra.app.plugin.processors.sleigh.pattern.OrPattern;
 import ghidra.app.script.GhidraScript;
 import ghidra.pcode.emulate.EmulateExecutionState;
-import ghidra.program.model.lang.protorules.*;
-import ghidra.program.model.mem.*;
 import ghidra.program.model.lang.*;
 import ghidra.program.model.pcode.*;
-import ghidra.program.model.data.ISF.*;
-import ghidra.program.model.util.*;
-import ghidra.sleigh.grammar.SleighEcho.endian_return;
-import ghidra.sleigh.grammar.SleighParser.oplist_return;
-import ghidra.sleigh.grammar.SleighParser_SemanticParser.return_stmt_return;
 import ghidra.util.exception.CancelledException;
-import ghidra.program.model.reloc.*;
-import ghidra.program.model.data.*;
-import ghidra.program.model.block.*;
-import ghidra.program.model.correlate.Hash;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.scalar.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.address.*;
-import ghidra.program.flatapi.FlatProgramAPI;
 import ghidra.app.decompiler.*;
 
 
@@ -628,7 +614,9 @@ public class emulate_by_step_observation extends GhidraScript {
         println("[!] end: " + emuManager.endAddressOfHashing.toString());
 
         /* parse json */
-        String filePath = "dlls/exports.json"; // JSONファイルのパス
+        String dir = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
+        println("dir: " + dir);
+        String filePath = dir + "/dlls/exports.json"; // JSONファイルのパス
         HashMap<String, List<String>> dllApiMap = readDBJson(filePath);
 
         println("size: " + dllApiMap.size());
