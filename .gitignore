@@ -38,3 +38,10 @@ gradle/
 build.gradle
 gradlew
 gradlew.bat
+out/
+
+# ghidra_project
+ghidra_repo.rep/
+ghidra_repo.gpr
+ghidra_repo.lock
+ghidra_repo.lock~
