@@ -5,13 +5,13 @@ This tool mainly utilizes information obtained by DynamoRIO and emulation by Ghi
 
 ## Todo
 ### DBI
-- [ ] 結果をjsonで出力
-  - [ ] API名取得命令のアドレス 
-  - [ ] API Hashingの後、実際に取得されたAPI名
+- [x] 結果をjsonで出力
+  - [x] API名取得命令のアドレス 
+  - [x] API Hashingの後、実際に取得されたAPI名
   
 ### Ghidra Script (Emulate)
-- [ ] 開始アドレスの決定
-  - [ ] DBIの出力と連携
+- [ ] DBI出力との連携
+  - [ ] json解析し、開始アドレスを決定
 - [x] API名を格納するメモリの確保
 - [ ] API名を扱うレジスタの決定
   - [x] 命令のディスティネーション
