@@ -12,10 +12,11 @@ import java.math.BigInteger;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Set;
 import java.io.FileReader;
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.StringReader;
+import java.lang.reflect.Type;
 
 import ghidra.app.emulator.EmulatorHelper;
 
@@ -34,6 +35,7 @@ import ghidra.program.model.address.*;
 import ghidra.app.decompiler.*;
 
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 
 public class emulate_by_step_observation extends GhidraScript {
@@ -373,46 +375,96 @@ public class emulate_by_step_observation extends GhidraScript {
                     hash = emu.readRegister(this.regStoredHash);
                     break;
                 }
-
             }
-
             return hash;
-
         }
     }
 
-    class DbiInfo {
+    public class DbiInfo {
         String start;
-        List<String> adr_get_name;
+        List<String> addr_get_name;
+        List<String> addr_get_addr;
         List<String> resolved_name;
+    }
+
+    public class DbiInfoHandler {
+        private DbiInfo dynamicInfo;
+        private Program currentProgram;
+
+        public DbiInfoHandler(String dbiJsonPath, Program currentProgram) {
+            this.currentProgram = currentProgram;
+            this.dynamicInfo = parseDbiInfo(dbiJsonPath);
+        }
+    
+        private DbiInfo parseDbiInfo(String dbiJsonPath) {
+            Gson gson = new Gson();
+            try (FileReader reader = new FileReader(dbiJsonPath)) {
+                return gson.fromJson(reader, DbiInfo.class);
+            } catch (IOException e) {
+                e.printStackTrace();
+                return null;
+            }
+        }
+    
+        public Address getReadNameAddress() {
+            int entry = parseHex(dynamicInfo.start);
+            int addrGetName = parseHex(dynamicInfo.addr_get_name.get(0));
+            return toAddr(addrGetName - entry + currentProgram.getImageBase().getOffset());
+        }
+    
+        public Address getReadAddrAddress() {
+            int entry = parseHex(dynamicInfo.start);
+            int addrGetAddr = parseHex(dynamicInfo.addr_get_addr.get(0));
+            return toAddr(addrGetAddr - entry + currentProgram.getImageBase().getOffset());
+        }
+
+        public String getResolvedName() {
+            return dynamicInfo.resolved_name.get(0);
+        }
+    
+        private int parseHex(String hexString) {
+            return Integer.parseInt(hexString.substring(2), 16);
+        }
+    }
+
+    public class DllFunctionLoader {
+        private HashMap<String, List<String>> dllFunctions;
+    
+        public DllFunctionLoader(String jsonFilePath) {
+            Gson gson = new Gson();
+            Type hashMapType = new TypeToken<HashMap<String, List<String>>>() {}.getType();
+            try (FileReader reader = new FileReader(jsonFilePath)) {
+                dllFunctions = gson.fromJson(reader, hashMapType);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public Set<String> getDllNames() {
+            return dllFunctions.keySet();
+        }
+    
+        public List<String> getFunctions(String dllName) {
+            return dllFunctions.get(dllName);
+        }
+    
+        public HashMap<String, List<String>> getAllDllFunctions() {
+            return dllFunctions;
+        }
     }
 
     @Override
     protected void run() throws Exception {
         /* setup env from DBI information */
-        // Address readMemAddress = toAddr(0x40131e);
-        Address endAddress = toAddr(0x401358);
-
-        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "/out/output.json";
-        Gson gson = new Gson();
-        DbiInfo dynamicInfo = null;
-
-        try (FileReader reader = new FileReader(dbiJsonPath)) {
-            dynamicInfo = gson.fromJson(reader, DbiInfo.class);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        int entry = Integer.parseInt(dynamicInfo.start.substring(2), 16);
-        int addrMemAccess = Integer.parseInt(dynamicInfo.adr_get_name.get(0).substring(2), 16);
-        String name = dynamicInfo.resolved_name.get(0);
-
-        Address readMemAddress = toAddr(addrMemAccess - entry + currentProgram.getImageBase().getOffset());
-        // println("readMem: " + readMemAddress.toString());
-
+        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\output.json";
+        DbiInfoHandler handler = new DbiInfoHandler(dbiJsonPath, currentProgram);
+        Address readNameAddress = handler.getReadNameAddress();
+        Address readAddrAddress = handler.getReadAddrAddress();
+        String resolvedName = handler.getResolvedName();
+        
         /* search hash candidates */
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
-        HashMap<Address, List<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readMemAddress, endAddress);
+        HashMap<Address, List<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readNameAddress, readAddrAddress);
         List<String> candidates = new ArrayList<String>();
         for (Address addr : hashCandidates.keySet()) {
             for (Scalar scalar : hashCandidates.get(addr)) {
@@ -424,26 +476,27 @@ public class emulate_by_step_observation extends GhidraScript {
 
         /* analyze memory-access instruction */
         InstructionAnalyzer analyzer = new InstructionAnalyzer();
-        String dstRegisterAtStart = analyzer.getRegister(readMemAddress, 0);
+        String dstRegisterAtStart = analyzer.getRegister(readNameAddress, 0);
         // if dstRegister is null, then the program will be cancelled
         if (dstRegisterAtStart == null) {
             throw new RuntimeException("register is null?");
         }
 
         /* identify ranges of Hashing by step emulating */
-        EmulationManager emuManager = new EmulationManager(currentProgram, readMemAddress);
-        emuManager.identifyRangeOfHashing("CreateThread", hashCandidates);
+        EmulationManager emuManager = new EmulationManager(currentProgram, readNameAddress);
+        emuManager.identifyRangeOfHashing(resolvedName, hashCandidates);
 
         /* parse APInames db(json) */
         String dir = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
-        String filePath = dir + "\\dlls\\exports.json"; // windows
-        HashMap<String, List<String>> dllApiMap = readDBJson(filePath);
+        String dllJsonPath = dir + "\\dlls\\exports.json"; // windows
+        // String dllJsonPath = dir + "/dlls/exports.json"; // linux
+        DllFunctionLoader loader = new DllFunctionLoader(dllJsonPath);
         
         /* caliculate hashDB */
         println("[+] now caliculating hash values...");
         HashMap<String, BigInteger> hashDB = new HashMap<>();
-        for (String dll: dllApiMap.keySet()) {
-            for (String api: dllApiMap.get(dll)) {
+        for (String dll: loader.getDllNames()) {
+            for (String api: loader.getFunctions(dll)) {
                 BigInteger hash = emuManager.caliculateHashValue(api);
                 hashDB.put(api, hash);
             }
@@ -469,36 +522,6 @@ public class emulate_by_step_observation extends GhidraScript {
         }
 
         return false;
-    }
-
-    public HashMap<String, List<String>> readDBJson(String filePath) {
-        HashMap<String, List<String>> dllApiMap = new HashMap<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
-            String line;
-            String currentDLL = null;
-
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-
-                if (line.startsWith("\"") && line.contains(".dll")) {
-                    int startQuote = line.indexOf('"');
-                    int endQuote = line.indexOf('"', startQuote + 1);
-                    currentDLL = line.substring(startQuote + 1, endQuote);
-                    dllApiMap.put(currentDLL, new ArrayList<>());
-                }
-
-                if (line.startsWith("\"") && currentDLL != null) {
-                    int startQuote = line.indexOf('"');
-                    int endQuote = line.indexOf('"', startQuote + 1);
-                    String apiName = line.substring(startQuote + 1, endQuote);
-                    dllApiMap.get(currentDLL).add(apiName);
-                }
-            }
-        } catch (IOException e) {
-            println("Failed to read the file: " + e.getMessage());
-        }
-
-        return dllApiMap;
     }
 
     public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates) {
