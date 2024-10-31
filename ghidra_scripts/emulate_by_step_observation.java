@@ -15,6 +15,7 @@ import java.util.Iterator;
 import java.io.FileReader;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.StringReader;
 
 import ghidra.app.emulator.EmulatorHelper;
 
@@ -31,6 +32,8 @@ import ghidra.program.model.scalar.*;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.address.*;
 import ghidra.app.decompiler.*;
+
+import com.google.gson.Gson;
 
 
 public class emulate_by_step_observation extends GhidraScript {
@@ -70,7 +73,8 @@ public class emulate_by_step_observation extends GhidraScript {
             List<Scalar> scalarList = new ArrayList<>();
             Scalar scalar = instr.getScalar(index);
             if (scalar != null) {
-                scalarList.add(scalar);
+                if (scalar.getValue() > 0)
+                    scalarList.add(scalar);
             }
             return scalarList;
         }
@@ -84,7 +88,8 @@ public class emulate_by_step_observation extends GhidraScript {
                 Data data = this.program.getListing().getDefinedDataAt(toAddr);
                 Scalar scalar = getScalarFromData(data);
                 if (scalar != null) {
-                    scalarList.add(scalar);
+                    if (scalar.getValue() > 0)
+                        scalarList.add(scalar);
                 }
             }
             return scalarList;
@@ -210,7 +215,8 @@ public class emulate_by_step_observation extends GhidraScript {
                     Scalar scalar = getScalarFromData(data);
                     if (scalar != null) {
                         if (scalar.getValue() == 0) break;
-                        scalarList.add(scalar);
+                        if (scalar.getValue() > 0)
+                            scalarList.add(scalar);
                     }
                 }
             }
@@ -375,11 +381,34 @@ public class emulate_by_step_observation extends GhidraScript {
         }
     }
 
+    class DbiInfo {
+        String start;
+        List<String> adr_get_name;
+        List<String> resolved_name;
+    }
+
     @Override
     protected void run() throws Exception {
         /* setup env from DBI information */
-        Address readMemAddress = toAddr(0x40131e);
+        // Address readMemAddress = toAddr(0x40131e);
         Address endAddress = toAddr(0x401358);
+
+        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "/out/output.json";
+        Gson gson = new Gson();
+        DbiInfo dynamicInfo = null;
+
+        try (FileReader reader = new FileReader(dbiJsonPath)) {
+            dynamicInfo = gson.fromJson(reader, DbiInfo.class);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        int entry = Integer.parseInt(dynamicInfo.start.substring(2), 16);
+        int addrMemAccess = Integer.parseInt(dynamicInfo.adr_get_name.get(0).substring(2), 16);
+        String name = dynamicInfo.resolved_name.get(0);
+
+        Address readMemAddress = toAddr(addrMemAccess - entry + currentProgram.getImageBase().getOffset());
+        // println("readMem: " + readMemAddress.toString());
 
         /* search hash candidates */
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
