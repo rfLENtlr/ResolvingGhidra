@@ -18,9 +18,11 @@
 module_data_t *main_mod;            // Store infor about main module (e.g. analyzed malware sample)
 itreenode_t *intervalTree = NULL;   // Root node for the interval tree
 
-DWORD pc_array[MAX_ENTRIES];
+DWORD addr_name_array[MAX_ENTRIES];
+DWORD addr_address_array[MAX_ENTRIES];
 char* name_array[MAX_ENTRIES];
-int pc_count = 0;
+int count_for_name = 0;
+int count_for_addr = 0;
 int name_count = 0;
 
 void write_to_json(app_pc start) {
@@ -40,10 +42,18 @@ void write_to_json(app_pc start) {
 
     dr_fprintf(file, "  \"start\": \"0x%X\",\n", (DWORD)start);
 
-    dr_fprintf(file, "  \"adr_get_name\": [\n");\
+    dr_fprintf(file, "  \"addr_get_name\": [\n");\
 
-    for (int i = 0; i < pc_count; i++) {
-        dr_fprintf(file, "    \"0x%X\"%s\n", pc_array[i], i < pc_count - 1 ? "," : "");
+    for (int i = 0; i < count_for_name; i++) {
+        dr_fprintf(file, "    \"0x%X\"%s\n", addr_name_array[i], i < count_for_name - 1 ? "," : "");
+    }
+
+    dr_fprintf(file, "  ],\n");
+
+    dr_fprintf(file, "  \"addr_get_addr\": [\n");
+
+    for (int i = 0; i < count_for_addr; i++) {
+        dr_fprintf(file, "    \"0x%X\"%s\n", addr_address_array[i], i < count_for_addr - 1 ? "," : "");
     }
 
     dr_fprintf(file, "  ],\n");
@@ -65,9 +75,9 @@ void free_name_array() {
     }
 }
 
-bool is_pc_exists(DWORD pc) {
-    for (int i = 0; i < pc_count; i++) {
-        if (pc_array[i] == pc) {
+bool is_pc_exists(DWORD pc, DWORD *array, int count) {
+    for (int i = 0; i < count; i++) {
+        if (array[i] == pc) {
             return true;
         }
     }
@@ -83,9 +93,12 @@ bool is_name_exists(const char* name) {
     return false;
 }
 
-void store_pc(DWORD pc) {
-    if (!is_pc_exists(pc) && pc_count < MAX_ENTRIES) {
-        pc_array[pc_count++] = pc;
+void store_pc(DWORD pc, bool is_for_addr) {
+    DWORD *array = is_for_addr ? addr_address_array : addr_name_array;
+    int *count = is_for_addr ? &count_for_addr : &count_for_name;
+
+    if (!is_pc_exists(pc, array, *count) && *count < MAX_ENTRIES) {
+        array[(*count)++] = pc;
     }
 }
 
@@ -153,7 +166,7 @@ void TestMemoryAccess(app_pc pc, reg_id_t base_id, int disp_id, reg_id_t index_i
     itreenode_t *tree_names = is_ExportTableNamesReference((PDWORD)base);
     if (tree_names != NULL) {
         // dr_printf("[+] AddressOfNames found\n   pc: 0x%X\n", pc);
-        store_pc((DWORD)pc);
+        store_pc((DWORD)pc, false);
     }
 
     itreenode_t *tree_functions = is_ExportTableFunctionsReference((PDWORD)base);
@@ -163,6 +176,7 @@ void TestMemoryAccess(app_pc pc, reg_id_t base_id, int disp_id, reg_id_t index_i
         // dr_printf("[+] addr: 0x%x, base: %x, disp: %x, index: %x, scale: %x\n", pc, base , disp_id, reg_get_value(index_id, &mc), scale_id);
         // dr_printf("[*] name: %s, addr: 0x%x\n", (char *)((DWORD_PTR)tree->start_addr + (DWORD) tree->AddressOfNames[index]), pc);
         // dr_printf("    Resolved name: %s\n", (char *)((DWORD_PTR)tree_functions->start_addr + (DWORD) tree_functions->AddressOfNames[api_index]));
+        store_pc((DWORD)pc, true);
         store_name((char *)((DWORD_PTR)tree_functions->start_addr + (DWORD) tree_functions->AddressOfNames[api_index]));
     }
 }
