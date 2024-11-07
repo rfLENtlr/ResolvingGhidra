@@ -1,0 +1,3 @@
+C:/Users/joker/Desktop/ResolvingGhidra/client/build/CMakeFiles/dr_client.dir
+C:/Users/joker/Desktop/ResolvingGhidra/client/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/joker/Desktop/ResolvingGhidra/client/build/CMakeFiles/ZERO_CHECK.dir
