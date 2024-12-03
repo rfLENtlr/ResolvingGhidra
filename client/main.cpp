@@ -41,6 +41,8 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[])
     // Get main module information
     main_mod = dr_get_main_module();
 
+    write_file_init();
+
     // Register event's callbacks
     dr_register_exit_event(exit_event_callback);
     drmgr_register_module_load_event(module_load_event_callback);
@@ -50,7 +52,6 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[])
 static void exit_event_callback(void)
 {
     dr_printf("[*] Analysis terminated.\n");
-    write_to_json();
     free_name_array();
 
     dr_free_module_data(main_mod);

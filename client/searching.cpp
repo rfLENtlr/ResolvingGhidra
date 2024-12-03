@@ -19,6 +19,8 @@ extern int count_for_name;
 extern int count_for_addr;
 extern int name_count;
 
+char logname[MAX_PATH];
+
 /* Functions declaration */
 instr_t *decode_instruction(void *drcontext, app_pc pc); // May be moved to an utils file instead
 bool search_address_of_names(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
@@ -27,6 +29,7 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
 bool search_address_of_functions(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
 // void display_api_name(itreenode_t *tree, DWORD offset, app_pc pc);
 
+void write_file_init();
 void write_to_json();
 void free_name_array();
 bool is_pc_exists(DWORD pc, DWORD *array, int count);
@@ -127,6 +130,7 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
         reg_t val = reg_get_value(opnd_get_reg(opnd), mc);
         if ((DWORD)val >= tree->name_RVA_first && (DWORD)val <= tree->name_RVA_last) {
             store_pc((DWORD)pc, false);
+            write_to_json();
             // display_api_name(tree, val, pc);
             return true;
         }
@@ -142,6 +146,7 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
         DWORD val = *(PDWORD)(base_val + index_val * scale + disp);
         if (val >= tree->name_RVA_first && val <= tree->name_RVA_last) {
             store_pc((DWORD)pc, false);
+            write_to_json();
             // display_api_name(tree, val, pc);
             return true;
         }
@@ -181,19 +186,28 @@ bool search_address_of_functions(void *drcontext, instr_t *instr, dr_mcontext_t 
         char *api_name = (char *)((DWORD_PTR)tree->start_addr + (DWORD)tree->AddressOfNames[index]);
         // dr_printf(">> API-name: %s\n", api_name);
         store_name(api_name);
+        write_to_json();
     }
 
     return true;
 }
 
-void write_to_json() {
-    char logname[MAX_PATH];
+void write_file_init() {
     char *sample_name = _strdup(main_mod->names.exe_name);
-
     _splitpath(sample_name, NULL, NULL, sample_name, NULL);
     strcpy_s(logname, OUTPATH);
     strcat_s(logname, sample_name);
     strcat_s(logname, ".json");
+}
+
+
+void write_to_json() {
+    // char logname[MAX_PATH];
+    // char *sample_name = _strdup(main_mod->names.exe_name);
+    // _splitpath(sample_name, NULL, NULL, sample_name, NULL);
+    // strcpy_s(logname, OUTPATH);
+    // strcat_s(logname, sample_name);
+    // strcat_s(logname, ".json");
 
     file_t file = dr_open_file(logname, DR_FILE_WRITE_OVERWRITE);
     if (file == NULL) {
