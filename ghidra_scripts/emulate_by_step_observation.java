@@ -14,9 +14,15 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Set;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 
 import ghidra.app.emulator.EmulatorHelper;
 
@@ -34,7 +40,7 @@ import ghidra.program.model.listing.*;
 import ghidra.program.model.address.*;
 import ghidra.app.decompiler.*;
 
-import com.google.gson.Gson;
+import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 
 
@@ -282,6 +288,8 @@ public class emulate_by_step_observation extends GhidraScript {
         private Address endAddressOfHashing;
         private String regAtStart;
         private String regStoredHash;
+        private BigInteger hash;
+        private boolean timeout;
 
         public EmulationManager(Program program, Address readMemAddress) {
             this.emu = new EmulatorHelper(program);
@@ -289,6 +297,8 @@ public class emulate_by_step_observation extends GhidraScript {
             this.startAddress = getInstructionAt(readMemAddress).getNext().getAddress();
             this.endAddressOfHashing = null;
             this.regStoredHash = null;
+            this.hash = null;
+            this.timeout = false;
 
             analyzeRegAtStart();
             emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
@@ -310,34 +320,60 @@ public class emulate_by_step_observation extends GhidraScript {
         }
 
         private void identifyRangeOfHashing(String apiName, HashMap<Address, List<Scalar>> hashCandidates) {
+            Address currentAddress;
             Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
             Address stringAddress = toAddr(0xa00000);
+            long startTime = System.currentTimeMillis();
+
             emu.writeMemoryValue(stringAddress, 0x32, 0x00);
             emu.writeMemory(stringAddress, apiName.getBytes());        
             emu.writeRegister(regAtStart, stringAddress.getOffset());
 
-
             String regName = null;
             boolean hashFound = false;
+
+            println("end:"+ retAddress.toString());
             while(!monitor.isCancelled()) {
-                currentAddress = emu.getExecutionAddress();
-                Instruction instr = getInstructionAt(currentAddress);
-                int numOperands = instr.getNumOperands();
-                for (int i=0; i<numOperands; i++) {
-                    if(OperandType.isRegister(instr.getOperandType(i))) {
-                        regName = instr.getDefaultOperandRepresentation(i);
-                        if (checkHash(emu, regName, hashCandidates)) {
-                            println("[+] First Emulation, result equals hashCandidate: 0x" + emu.readRegister(regName).toString(16) + " -> address: " + currentAddress);
-                            this.regStoredHash = regName;
-                            this.endAddressOfHashing = currentAddress;
-                            hashFound = true;
-                            break;
-                        }
-                    }    
+                long elapsedTime = System.currentTimeMillis() - startTime;
+                if (elapsedTime > 10000) {
+                    println("timeout, cannot identify range of Hashing");
+                    this.timeout = true;
+                    return;
                 }
+                currentAddress = emu.getExecutionAddress();
+                
+                if (!hashFound) {
+                    Instruction instr = getInstructionAt(currentAddress);
+                    int numOperands = instr.getNumOperands();
+                    for (int i=0; i<numOperands; i++) {
+                        if(OperandType.isRegister(instr.getOperandType(i))) {
+                            regName = instr.getDefaultOperandRepresentation(i);
+                            if (checkHash(emu, regName, hashCandidates)) {
+                                this.hash = emu.readRegister(regName);
+                                println("[+] First Emulation, result equals hashCandidate: 0x" + this.hash.toString(16) + " -> address: " + currentAddress);
+                                this.regStoredHash = regName;
+                                this.endAddressOfHashing = currentAddress;
+                                retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
+                                println("update retAddr: " +retAddress.toString());
+                                hashFound = true;
+                                break;
+                            }
+                        }    
+                    }
+                }
+                
+                // println(currentAddress.toString());
+                if (currentAddress.toString().equals(retAddress.toString())) {
+                    println("now is retaddress");
+                    if (emu.readRegister("EAX").equals(this.hash)) {
+                        this.endAddressOfHashing = currentAddress;
+                    }
+                    break;
+                }
+                
 
                 // if currentAddress doesn't reach to retAddress, or hash value is found, continue
-                if (currentAddress == retAddress || hashFound) break;
+                // if (currentAddress == retAddress && hashFound) break;
                 
                 try {
                     emu.step(monitor);
@@ -456,7 +492,11 @@ public class emulate_by_step_observation extends GhidraScript {
     @Override
     protected void run() throws Exception {
         /* setup env from DBI information */
-        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\output.json";
+        String fileName = getProgramFile().getName();
+        if (fileName.endsWith(".exe")) {
+            fileName = fileName.substring(0, fileName.length() - 4);
+        }
+        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\dbi\\" + fileName + ".json";
         DbiInfoHandler handler = new DbiInfoHandler(dbiJsonPath, currentProgram);
         Address readNameAddress = handler.getReadNameAddress();
         Address readAddrAddress = handler.getReadAddrAddress();
@@ -486,6 +526,11 @@ public class emulate_by_step_observation extends GhidraScript {
         EmulationManager emuManager = new EmulationManager(currentProgram, readNameAddress);
         emuManager.identifyRangeOfHashing(resolvedName, hashCandidates);
 
+        if (emuManager.timeout) {
+            throw new RuntimeException("cannot find Hashing, so stopped...");
+            
+        }
+
         /* parse APInames db(json) */
         String dir = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
         String dllJsonPath = dir + "\\dlls\\exports.json"; // windows
@@ -501,11 +546,16 @@ public class emulate_by_step_observation extends GhidraScript {
                 hashDB.put(api, hash);
             }
         }
+
+        String dbPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\db\\" + fileName + ".json";
+        Path dbOutputPath = Paths.get(dbPath);
+        writeHashDatabase(hashDB, dbOutputPath);
         println("[+] caliculation done!");
 
         /* search hash value in DB and resolve API name */
         println("[+] now resolving API names from hash values...");
-        searchHashValues(hashDB, hashCandidates);
+        String resultsPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\resolve\\" + fileName + ".txt";
+        searchHashValues(hashDB, hashCandidates, resultsPath);
 
     }
 
@@ -524,16 +574,64 @@ public class emulate_by_step_observation extends GhidraScript {
         return false;
     }
 
-    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates) {
-        for (Address addr : hashCandidates.keySet()) {
-            for (Scalar scalar : hashCandidates.get(addr)) {
-                for (String api : hashDB.keySet()) {
-                    if (hashDB.get(api).equals(BigInteger.valueOf(scalar.getValue()))) {
-                        println("[+] API: " + api + " -> hash: 0x" + hashDB.get(api).toString(16) + " -> Address: " + addr);
-                    }
+    // public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates) {
+    //     for (Address addr : hashCandidates.keySet()) {
+    //         for (Scalar scalar : hashCandidates.get(addr)) {
+    //             for (String api : hashDB.keySet()) {
+    //                 if (hashDB.get(api).equals(BigInteger.valueOf(scalar.getValue()))) {
+    //                     println("[+] API: " + api + " -> hash: 0x" + hashDB.get(api).toString(16) + " -> Address: " + addr);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
+    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates, String outputFilePath) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
+            for (Address addr : hashCandidates.keySet()) {
+                List<Scalar> scalars = hashCandidates.get(addr);
+                for (Scalar scalar : scalars) {
+                    BigInteger scalarValue = BigInteger.valueOf(scalar.getValue());
+                    writeMatchingAPIs(hashDB, addr, scalarValue, writer);
                 }
             }
+            println("[*] Resolved results written to file: " + outputFilePath);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
+    private void writeMatchingAPIs(HashMap<String, BigInteger> hashDB, Address addr, BigInteger scalarValue, BufferedWriter writer) throws IOException {
+        for (String api : hashDB.keySet()) {
+            BigInteger hashValue = hashDB.get(api);
+            if (!hashValue.equals(scalarValue)) {
+                continue;
+            }
+            String output = "[+] API: " + api + " -> hash: 0x" + hashValue.toString(16) + " -> Address: " + addr;
+            println(output);
+            writer.write(output);
+        }
+    }
+
+
+
+    public void writeHashDatabase(HashMap<String, BigInteger> hashDB, Path filePath) {
+        Gson gson = new GsonBuilder()
+            .registerTypeAdapter(BigInteger.class, new JsonSerializer<BigInteger>() {
+                @Override
+                public JsonElement serialize(BigInteger src, Type typeOfSrc, JsonSerializationContext context) {
+                    return new JsonPrimitive("0x" + src.toString(16));
+                }
+            })
+            .setPrettyPrinting()
+            .create();
+        String json = gson.toJson(hashDB);
+
+        try {
+            Files.writeString(filePath, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            println("[*] HashDB written to: " + filePath.toAbsolutePath());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 }
