@@ -36,7 +36,7 @@ for %%f in (%PROJECT_DIR%\samples\*) do (
     cmake -DDynamoRIO_DIR=%DYMAORIO_DIR%\cmake\ ..
     cd %CLIENT_DIR%
     cmake --build %CLIENT_DIR%\build
-    %DYMAORIO_DIR%\bin32\drrun.exe -c %CLIENT_DIR%\build\Debug\dr_client.dll -- %%f
+    %DYMAORIO_DIR%\bin32\drrun.exe -follow_children -c %CLIENT_DIR%\build\Debug\dr_client.dll -- %%f
 
     timeout /t 1
 
@@ -44,7 +44,7 @@ for %%f in (%PROJECT_DIR%\samples\*) do (
     set GHIDRA_PATH=C:\Tools\ghidra_11.1.2_PUBLIC\support\analyzeHeadless.bat
     set REPO_NAME=ghidra_repo
     set SCRIPT_PATH=ghidra_scripts
-    set SCRIPT_NAME=emulate_by_step_observation.java
+    set SCRIPT_NAME=Emulate.java
 
     %GHIDRA_PATH% %PROJECT_DIR% %REPO_NAME% -import %%f -overwrite -scriptPath %SCRIPT_PATH% -postScript %SCRIPT_NAME% -max-cpu 4
 )
