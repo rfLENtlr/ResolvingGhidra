@@ -15,7 +15,6 @@ import java.util.Iterator;
 import java.util.Set;
 import java.io.FileReader;
 import java.io.FileWriter;
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.lang.reflect.Type;
@@ -44,28 +43,7 @@ import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 
 
-public class emulate_by_step_observation extends GhidraScript {
-
-    public static int x86 = 8;
-
-    public class InstructionAnalyzer {
-
-        public String getRegister(Address address, int operandIndex) {
-            Instruction instr = getInstructionAt(address);
-            if (instr == null) {
-                throw new RuntimeException("No instruction at the specified address.");
-            }
-            // get first operand
-            // int operandIndex = 0;
-            String registerName = null;
-            if (instr.getNumOperands() > operandIndex) {
-                registerName = instr.getDefaultOperandRepresentation(operandIndex);
-            } else {
-                println("The instruction does not have a first operand.");
-            }
-            return registerName;
-        } 
-    }
+public class Emulate extends GhidraScript {
 
     public class hashvaluesAnalyzer {
         private Program program;
@@ -81,8 +59,8 @@ public class emulate_by_step_observation extends GhidraScript {
             List<Scalar> scalarList = new ArrayList<>();
             Scalar scalar = instr.getScalar(index);
             if (scalar != null) {
-                if (scalar.getValue() > 0)
-                    scalarList.add(scalar);
+                // if (scalar.getValue() > 0)
+                scalarList.add(scalar);
             }
             return scalarList;
         }
@@ -112,8 +90,10 @@ public class emulate_by_step_observation extends GhidraScript {
             }
 
             Varnode var = getVarnodeFromPcode(highFunction, currentAddr, index);
+            // println("var: " + var.toString());
 
             if (var == null || !isParameterVarnode(var)) {
+                // println("var is null or not parameter");
                 return null;
             }
 
@@ -148,6 +128,7 @@ public class emulate_by_step_observation extends GhidraScript {
 
         private boolean isParameterVarnode(Varnode var) {
             String varName = var.getHigh().getName();
+            // println("varName: " + varName);
             return varName.startsWith("param");
         }
 
@@ -156,6 +137,7 @@ public class emulate_by_step_observation extends GhidraScript {
             return Integer.parseInt(varName.substring(6));
         }
 
+        /* try to extract an argument from caller functions */
         private List<Scalar> getScalarForParameter(HighFunction highFuction, int paramIndex) {
             List<Scalar> scalarList = new ArrayList<>();
             Reference[] callers = getReferencesTo(highFuction.getFunction().getEntryPoint());
@@ -163,8 +145,9 @@ public class emulate_by_step_observation extends GhidraScript {
             for (Reference caller : callers) {
                 if (caller.getReferenceType().isCall()) {
                     Function callerFunc = getFunctionContaining(caller.getFromAddress());
-                    HighFunction callerHighFunc = decompileCallerFunction(callerFunc);
+                    if (callerFunc == null || callerFunc.getName().equals(highFuction.getFunction().getName())) continue;
 
+                    HighFunction callerHighFunc = decompileCallerFunction(callerFunc);
                     if (callerHighFunc != null) {
                         List<Scalar> scalars = findScalarInCallerPcode(callerHighFunc, caller, paramIndex);
                         if (!scalars.isEmpty()) {
@@ -188,14 +171,17 @@ public class emulate_by_step_observation extends GhidraScript {
 
             while (callerPcodeOps.hasNext()) {
                 PcodeOpAST pcodeOp = callerPcodeOps.next();
+
                 if (!pcodeOp.getMnemonic().equals("CALL")) continue;
                 
                 if (pcodeOp.getNumInputs() > paramIndex) {
                     Varnode varParam = pcodeOp.getInput(paramIndex);
 
+                    /* an example, where the input is constant */
+                    /* (register, 0x0, 4) CALL (ram, 0x30a3620, 8) , (register, 0x0, 4) , (const, 0xb1c1fe3, 4) */
                     if (varParam.isConstant()) scalarList.add(new Scalar(varParam.getSize() * 8, varParam.getOffset()));
-                    
-                    if (varParam.isUnique() || varParam.isAddress()) {
+                    else if (varParam.isUnique() || varParam.isAddress()) {
+                        // println("pcodeOp: " + pcodeOp.toString());
                         Address paramAddr = varParam.getPCAddress();
                         Instruction instr = getInstructionAt(paramAddr);
 
@@ -203,6 +189,15 @@ public class emulate_by_step_observation extends GhidraScript {
                             List<Scalar> scalars = getScalarFromInstruction(instr);
                             scalarList.addAll(scalars);
                         }
+                    }
+                    else {
+                        /* attempt to traverse caller functions */
+                        Varnode input = pcodeOp.getInput(paramIndex);
+                        if (input == null || !isParameterVarnode(input)) {
+                            continue;
+                        }
+                        int index = getPramIndexFromVarname(input);
+                        scalarList.addAll(getScalarForParameter(highFunction, index));
                     }
                 }
             }
@@ -223,8 +218,8 @@ public class emulate_by_step_observation extends GhidraScript {
                     Scalar scalar = getScalarFromData(data);
                     if (scalar != null) {
                         if (scalar.getValue() == 0) break;
-                        if (scalar.getValue() > 0)
-                            scalarList.add(scalar);
+                        // if (scalar.getValue() > 0)
+                        scalarList.add(scalar);
                     }
                 }
             }
@@ -266,6 +261,7 @@ public class emulate_by_step_observation extends GhidraScript {
                 String opCode = instr.getMnemonicString();
 
                 if (opCode.equals("CMP")) {
+                    // println("CMP: " + currentAddress.toString());
                     for (int i = 0; i < numOperands; i++){
                         // may getOperandValues return null
                         List<Scalar> scalars = getOperandValues(instr, i);
@@ -285,6 +281,8 @@ public class emulate_by_step_observation extends GhidraScript {
         private EmulatorHelper emu;
         private Address startAddress;
         private Address readMemAddress;
+        private Function startFunction;
+
         private Address endAddressOfHashing;
         private String regAtStart;
         private String regStoredHash;
@@ -299,9 +297,9 @@ public class emulate_by_step_observation extends GhidraScript {
             this.regStoredHash = null;
             this.hash = null;
             this.timeout = false;
+            this.startFunction = getFunctionContaining(readMemAddress);
 
             analyzeRegAtStart();
-            emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
         }
 
         private void analyzeRegAtStart() {
@@ -319,30 +317,28 @@ public class emulate_by_step_observation extends GhidraScript {
             this.regAtStart = registerName;
         }
 
-        private void identifyRangeOfHashing(String apiName, HashMap<Address, List<Scalar>> hashCandidates) {
-            Address currentAddress;
+        private boolean checkMatchHashCandidates(String apiName, HashMap<Address, List<Scalar>> hashCandidates) {
+            boolean hashFound = false;
+            String regName = null;
             Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
-            Address stringAddress = toAddr(0xa00000);
             long startTime = System.currentTimeMillis();
-
+            
+            emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
+            Address stringAddress = toAddr(0xa00000);           
             emu.writeMemoryValue(stringAddress, 0x32, 0x00);
             emu.writeMemory(stringAddress, apiName.getBytes());        
             emu.writeRegister(regAtStart, stringAddress.getOffset());
-
-            String regName = null;
-            boolean hashFound = false;
-
-            println("end:"+ retAddress.toString());
+            
             while(!monitor.isCancelled()) {
                 long elapsedTime = System.currentTimeMillis() - startTime;
                 if (elapsedTime > 10000) {
                     println("timeout, cannot identify range of Hashing");
                     this.timeout = true;
-                    return;
+                    return false;
                 }
                 currentAddress = emu.getExecutionAddress();
-                
                 if (!hashFound) {
+                    // println("current: " + currentAddress.toString());
                     Instruction instr = getInstructionAt(currentAddress);
                     int numOperands = instr.getNumOperands();
                     for (int i=0; i<numOperands; i++) {
@@ -354,26 +350,26 @@ public class emulate_by_step_observation extends GhidraScript {
                                 this.regStoredHash = regName;
                                 this.endAddressOfHashing = currentAddress;
                                 retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
-                                println("update retAddr: " +retAddress.toString());
                                 hashFound = true;
                                 break;
                             }
                         }    
                     }
                 }
-                
-                // println(currentAddress.toString());
-                if (currentAddress.toString().equals(retAddress.toString())) {
-                    println("now is retaddress");
-                    if (emu.readRegister("EAX").equals(this.hash)) {
-                        this.endAddressOfHashing = currentAddress;
-                    }
-                    break;
-                }
-                
 
-                // if currentAddress doesn't reach to retAddress, or hash value is found, continue
-                // if (currentAddress == retAddress && hashFound) break;
+                if (hashFound && this.startFunction.getBody().contains(currentAddress)) return true;
+
+                // If hashFound is true, execute until retAddress and check if EAX matches the hash.
+                // If hashFound is false and retAddress is reached, it means the hash was not found, so exit.
+                if (currentAddress.toString().equals(retAddress.toString())) {
+                    if (hashFound) {
+                        if (emu.readRegister("EAX").equals(this.hash)) {
+                            this.endAddressOfHashing = currentAddress;
+                        }
+                        return true;
+                    }
+                    return false;
+                }
                 
                 try {
                     emu.step(monitor);
@@ -381,8 +377,68 @@ public class emulate_by_step_observation extends GhidraScript {
                     println("Emulation step was cancelled: " + e.getMessage());
                     break;
                 }
-
             }
+            return false;
+        }
+
+        private void identifyRangeOfHashing(List<String> apiNames, HashMap<Address, List<Scalar>> hashCandidates) {
+            // long startTime = System.currentTimeMillis();
+            for (String apiName : apiNames) {
+                if (checkMatchHashCandidates(apiName, hashCandidates)) {
+                    break;
+                }
+            }
+            
+            // println("start: " + this.startAddress.toString());
+            // println("end:"+ retAddress.toString());
+            // while(!monitor.isCancelled()) {
+            //     long elapsedTime = System.currentTimeMillis() - startTime;
+            //     if (elapsedTime > 100000) {
+            //         println("timeout, cannot identify range of Hashing");
+            //         this.timeout = true;
+            //         return;
+            //     }
+            //     currentAddress = emu.getExecutionAddress();
+                
+            //     if (!hashFound) {
+            //         Instruction instr = getInstructionAt(currentAddress);
+            //         int numOperands = instr.getNumOperands();
+            //         for (int i=0; i<numOperands; i++) {
+            //             if(OperandType.isRegister(instr.getOperandType(i))) {
+            //                 regName = instr.getDefaultOperandRepresentation(i);
+            //                 if (checkHash(emu, regName, hashCandidates)) {
+            //                     this.hash = emu.readRegister(regName);
+            //                     println("[+] First Emulation, result equals hashCandidate: 0x" + this.hash.toString(16) + " -> address: " + currentAddress);
+            //                     this.regStoredHash = regName;
+            //                     this.endAddressOfHashing = currentAddress;
+            //                     retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
+            //                     hashFound = true;
+            //                     break;
+            //                 }
+            //             }    
+            //         }
+            //     }
+                
+            //     // println(currentAddress.toString());
+            //     if (currentAddress.toString().equals(retAddress.toString())) {
+            //         if (emu.readRegister("EAX").equals(this.hash)) {
+            //             this.endAddressOfHashing = currentAddress;
+            //         }
+            //         break;
+            //     }
+                
+
+            //     // if currentAddress doesn't reach to retAddress, or hash value is found, continue
+            //     // if (currentAddress == retAddress && hashFound) break;
+                
+            //     try {
+            //         emu.step(monitor);
+            //     } catch (CancelledException e) {
+            //         println("Emulation step was cancelled: " + e.getMessage());
+            //         break;
+            //     }
+
+            // }
         }
 
         private BigInteger caliculateHashValue(String apiName) {
@@ -403,8 +459,7 @@ public class emulate_by_step_observation extends GhidraScript {
                     try {
                         emu.step(monitor);
                     } catch (CancelledException e) {
-                        println("Emulation step was cancelled: " + e.getMessage());
-                        break;
+                        throw new RuntimeException("Emulation step was cancelled: " + e.getMessage());
                     }
                 }
                 else {
@@ -454,8 +509,8 @@ public class emulate_by_step_observation extends GhidraScript {
             return toAddr(addrGetAddr - entry + currentProgram.getImageBase().getOffset());
         }
 
-        public String getResolvedName() {
-            return dynamicInfo.resolved_name.get(0);
+        public List<String> getResolvedNames() {
+            return dynamicInfo.resolved_name;
         }
     
         private int parseHex(String hexString) {
@@ -489,34 +544,54 @@ public class emulate_by_step_observation extends GhidraScript {
         }
     }
 
+    InstructionAnalyzer insAnalyzer;
+
     @Override
     protected void run() throws Exception {
+        String currentPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
+        
+        // String separator= null;
+        // this is not perfect
+        // if (currentPath.contains("\\")) separator = "\\";
+        // if (currentPath.contains("/")) separator = "/";
+        // if (separator == null) {
+        //     throw new RuntimeException("misterious OS");
+        // }
+        String separator = System.getProperty("os.name").toLowerCase().contains("win") ? "\\" : "/";
+
         /* setup env from DBI information */
         String fileName = getProgramFile().getName();
         if (fileName.endsWith(".exe")) {
             fileName = fileName.substring(0, fileName.length() - 4);
         }
-        String dbiJsonPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\dbi\\" + fileName + ".json";
+        String dbiJsonPath = currentPath + separator + "out" + separator + "dbi" + separator + fileName + ".json";
         DbiInfoHandler handler = new DbiInfoHandler(dbiJsonPath, currentProgram);
         Address readNameAddress = handler.getReadNameAddress();
         Address readAddrAddress = handler.getReadAddrAddress();
-        String resolvedName = handler.getResolvedName();
+        List<String> resolvedNames = handler.getResolvedNames();
+        println("[+] readNameAddress: " + readNameAddress.toString());
+        println("[+] readAddrAddress: " + readAddrAddress.toString());
         
         /* search hash candidates */
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
         HashMap<Address, List<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readNameAddress, readAddrAddress);
+        if (hashCandidates.isEmpty()) {
+            throw new RuntimeException("No hash candidates found.");
+        }
+
         List<String> candidates = new ArrayList<String>();
         for (Address addr : hashCandidates.keySet()) {
             for (Scalar scalar : hashCandidates.get(addr)) {
-                candidates.add(scalar.toString());
+                candidates.add(scalar.toString(16, false, false, "0x", ""));
             }
         }
         println("[+] hashCandidates: " + Arrays.toString(candidates.toArray()));
 
 
         /* analyze memory-access instruction */
-        InstructionAnalyzer analyzer = new InstructionAnalyzer();
-        String dstRegisterAtStart = analyzer.getRegister(readNameAddress, 0);
+        insAnalyzer = new InstructionAnalyzer(this);
+        // InstructionAnalyzer analyzer = new InstructionAnalyzer();
+        String dstRegisterAtStart = insAnalyzer.getRegister(readNameAddress, 0);
         // if dstRegister is null, then the program will be cancelled
         if (dstRegisterAtStart == null) {
             throw new RuntimeException("register is null?");
@@ -524,17 +599,18 @@ public class emulate_by_step_observation extends GhidraScript {
 
         /* identify ranges of Hashing by step emulating */
         EmulationManager emuManager = new EmulationManager(currentProgram, readNameAddress);
-        emuManager.identifyRangeOfHashing(resolvedName, hashCandidates);
-
-        if (emuManager.timeout) {
-            throw new RuntimeException("cannot find Hashing, so stopped...");
+        emuManager.identifyRangeOfHashing(resolvedNames, hashCandidates);
+        // if (emuManager.timeout) {
+        //     throw new RuntimeException("cannot find Hashing, so stopped...");
             
+        // }    
+        if (emuManager.endAddressOfHashing == null) {
+            throw new RuntimeException("cannot find end of Hashing");
         }
+        println("[+] end of hashing: " + emuManager.endAddressOfHashing.toString());
 
         /* parse APInames db(json) */
-        String dir = getSourceFile().getParentFile().getParentFile().getAbsolutePath();
-        String dllJsonPath = dir + "\\dlls\\exports.json"; // windows
-        // String dllJsonPath = dir + "/dlls/exports.json"; // linux
+        String dllJsonPath = currentPath + separator + "dlls" + separator + "exports.json";
         DllFunctionLoader loader = new DllFunctionLoader(dllJsonPath);
         
         /* caliculate hashDB */
@@ -546,15 +622,14 @@ public class emulate_by_step_observation extends GhidraScript {
                 hashDB.put(api, hash);
             }
         }
-
-        String dbPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\db\\" + fileName + ".json";
+        String dbPath = currentPath + separator + "out" + separator + "db" + separator + fileName + ".json";
         Path dbOutputPath = Paths.get(dbPath);
         writeHashDatabase(hashDB, dbOutputPath);
-        println("[+] caliculation done!");
+        println("[+] caliculation done! output to: " + dbOutputPath.toAbsolutePath());
 
         /* search hash value in DB and resolve API name */
         println("[+] now resolving API names from hash values...");
-        String resultsPath = getSourceFile().getParentFile().getParentFile().getAbsolutePath() + "\\out\\resolve\\" + fileName + ".txt";
+        String resultsPath = currentPath + separator + "out" + separator + "resolve" + separator + fileName + ".txt";
         searchHashValues(hashDB, hashCandidates, resultsPath);
 
     }
@@ -574,24 +649,12 @@ public class emulate_by_step_observation extends GhidraScript {
         return false;
     }
 
-    // public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates) {
-    //     for (Address addr : hashCandidates.keySet()) {
-    //         for (Scalar scalar : hashCandidates.get(addr)) {
-    //             for (String api : hashDB.keySet()) {
-    //                 if (hashDB.get(api).equals(BigInteger.valueOf(scalar.getValue()))) {
-    //                     println("[+] API: " + api + " -> hash: 0x" + hashDB.get(api).toString(16) + " -> Address: " + addr);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
     public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates, String outputFilePath) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
             for (Address addr : hashCandidates.keySet()) {
                 List<Scalar> scalars = hashCandidates.get(addr);
                 for (Scalar scalar : scalars) {
-                    BigInteger scalarValue = BigInteger.valueOf(scalar.getValue());
+                    BigInteger scalarValue = BigInteger.valueOf(scalar.getUnsignedValue());
                     writeMatchingAPIs(hashDB, addr, scalarValue, writer);
                 }
             }
@@ -609,7 +672,7 @@ public class emulate_by_step_observation extends GhidraScript {
             }
             String output = "[+] API: " + api + " -> hash: 0x" + hashValue.toString(16) + " -> Address: " + addr;
             println(output);
-            writer.write(output);
+            writer.write(output + "\n");
         }
     }
 
