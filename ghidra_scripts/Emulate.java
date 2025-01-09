@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 import java.io.FileReader;
@@ -42,8 +43,25 @@ import ghidra.app.decompiler.*;
 import com.google.gson.*;
 import com.google.gson.reflect.TypeToken;
 
-
 public class Emulate extends GhidraScript {
+
+    public class ScalarWithAddress {
+        private Scalar scalar;
+        private Address addr;
+
+        public ScalarWithAddress(Scalar scalar, Address addr) {
+            this.scalar = scalar;
+            this.addr = addr;
+        }
+
+        public Scalar getScalar() {
+            return scalar;
+        }
+    
+        public Address getAddress() {
+            return addr;
+        }
+    }
 
     public class hashvaluesAnalyzer {
         private Program program;
@@ -55,18 +73,20 @@ public class Emulate extends GhidraScript {
             this.decomplib.openProgram(program);
         }
 
-        private List<Scalar> handleScalarOperand(Instruction instr, int index) {
-            List<Scalar> scalarList = new ArrayList<>();
+        // return <addr, scalar>
+        private List<ScalarWithAddress> handleScalarOperand(Instruction instr, int index) {
+            List<ScalarWithAddress> scalarList = new ArrayList<>();
             Scalar scalar = instr.getScalar(index);
             if (scalar != null) {
-                // if (scalar.getValue() > 0)
-                scalarList.add(scalar);
+                if (scalar.getValue() > 0){
+                    scalarList.add(new ScalarWithAddress(scalar, instr.getMinAddress()));
+                }
             }
             return scalarList;
         }
 
-        private List<Scalar> handleDataReferenceOperand(Instruction instr, int index) {
-            List<Scalar> scalarList = new ArrayList<>();
+        private List<ScalarWithAddress> handleDataReferenceOperand(Instruction instr, int index) {
+            List<ScalarWithAddress> scalarList = new ArrayList<>();
             Reference ref = instr.getPrimaryReference(index);
 
             if (ref != null && ref.isMemoryReference()) {
@@ -75,13 +95,13 @@ public class Emulate extends GhidraScript {
                 Scalar scalar = getScalarFromData(data);
                 if (scalar != null) {
                     if (scalar.getValue() > 0)
-                        scalarList.add(scalar);
+                        scalarList.add(new ScalarWithAddress(scalar, toAddr));
                 }
             }
             return scalarList;
         }
 
-        private List<Scalar> handleDynamicOrRegisterOperand(Instruction instr, int index) {
+        private List<ScalarWithAddress> handleDynamicOrRegisterOperand(Instruction instr, int index) {
             Address currentAddr = instr.getMinAddress();
             HighFunction highFunction = getHighFunctionForInstruction(currentAddr);
             
@@ -138,8 +158,8 @@ public class Emulate extends GhidraScript {
         }
 
         /* try to extract an argument from caller functions */
-        private List<Scalar> getScalarForParameter(HighFunction highFuction, int paramIndex) {
-            List<Scalar> scalarList = new ArrayList<>();
+        private List<ScalarWithAddress> getScalarForParameter(HighFunction highFuction, int paramIndex) {
+            List<ScalarWithAddress> scalarList = new ArrayList<>();
             Reference[] callers = getReferencesTo(highFuction.getFunction().getEntryPoint());
 
             for (Reference caller : callers) {
@@ -149,7 +169,7 @@ public class Emulate extends GhidraScript {
 
                     HighFunction callerHighFunc = decompileCallerFunction(callerFunc);
                     if (callerHighFunc != null) {
-                        List<Scalar> scalars = findScalarInCallerPcode(callerHighFunc, caller, paramIndex);
+                        List<ScalarWithAddress> scalars = findScalarInCallerPcode(callerHighFunc, caller, paramIndex);
                         if (!scalars.isEmpty()) {
                             scalarList.addAll(scalars);
                         }
@@ -165,8 +185,9 @@ public class Emulate extends GhidraScript {
             return results.decompileCompleted() ? results.getHighFunction() : null;
         }
 
-        private List<Scalar> findScalarInCallerPcode(HighFunction highFunction, Reference caller, int paramIndex) {
-            List<Scalar> scalarList = new ArrayList<>();
+        private List<ScalarWithAddress> findScalarInCallerPcode(HighFunction highFunction, Reference caller, int paramIndex) {
+            // call findScalarFromParameter
+            List<ScalarWithAddress> scalarList = new ArrayList<>();
             Iterator<PcodeOpAST> callerPcodeOps = highFunction.getPcodeOps(caller.getFromAddress());
 
             while (callerPcodeOps.hasNext()) {
@@ -179,14 +200,17 @@ public class Emulate extends GhidraScript {
 
                     /* an example, where the input is constant */
                     /* (register, 0x0, 4) CALL (ram, 0x30a3620, 8) , (register, 0x0, 4) , (const, 0xb1c1fe3, 4) */
-                    if (varParam.isConstant()) scalarList.add(new Scalar(varParam.getSize() * 8, varParam.getOffset()));
+                    if (varParam.isConstant()) {
+                        // Address addr = varParam.getDef().getSeqnum().getTarget();
+                        scalarList.add(new ScalarWithAddress(new Scalar(varParam.getSize() * 8, varParam.getOffset()), varParam.getPCAddress()));
+                    }
                     else if (varParam.isUnique() || varParam.isAddress()) {
                         // println("pcodeOp: " + pcodeOp.toString());
                         Address paramAddr = varParam.getPCAddress();
                         Instruction instr = getInstructionAt(paramAddr);
 
                         if (instr != null) {
-                            List<Scalar> scalars = getScalarFromInstruction(instr);
+                            List<ScalarWithAddress> scalars = getScalarFromInstruction(instr);
                             scalarList.addAll(scalars);
                         }
                     }
@@ -205,8 +229,8 @@ public class Emulate extends GhidraScript {
             return scalarList;
         }
         
-        private List<Scalar> getScalarFromInstruction(Instruction instr) {
-            List<Scalar> scalarList = new ArrayList<>();
+        private List<ScalarWithAddress> getScalarFromInstruction(Instruction instr) {
+            List<ScalarWithAddress> scalarList = new ArrayList<>();
             Reference ref = instr.getPrimaryReference(1);
 
             if (ref != null) {
@@ -219,7 +243,7 @@ public class Emulate extends GhidraScript {
                     if (scalar != null) {
                         if (scalar.getValue() == 0) break;
                         // if (scalar.getValue() > 0)
-                        scalarList.add(scalar);
+                        scalarList.add(new ScalarWithAddress(scalar, toAddr));
                     }
                 }
             }
@@ -227,7 +251,7 @@ public class Emulate extends GhidraScript {
             return scalarList;
         }
 
-        private List<Scalar> getOperandValues(Instruction instr, int index) {
+        private List<ScalarWithAddress> getOperandValues(Instruction instr, int index) {
             int operandType = instr.getOperandType(index);
 
             if (OperandType.isScalar(operandType)) {
@@ -241,19 +265,38 @@ public class Emulate extends GhidraScript {
             return Collections.emptyList();
         }
 
-        private void addScalarToMap(Address addr, Scalar scalar, HashMap<Address, List<Scalar>> map) {
-            map.computeIfAbsent(addr, k -> new ArrayList<>()).add(scalar);
+        private void addScalarToMap(Address addr, Scalar scalar, HashMap<Address, Set<Scalar>> map) {
+            map.computeIfAbsent(addr, k -> new HashSet<>()).add(scalar);
         }
 
         // this implementation is not perfect, because hash value is passed by parameter. must chase the value
         // find CMP instruction, and get the value
         // if the value is located in DAT, get the value from DAT Address
         // if the value is passed by register, chase the register value
-        public HashMap<Address, List<Scalar>> analyzeInstructions(Address startAddress, Address endAddress) {
+        public HashMap<Address, Set<Scalar>> analyzeInstructions(Address startAddress, Address endAddress) {
             Listing listing = this.program.getListing();
-            AddressSetView addressSet = new AddressSet(startAddress, endAddress);
+            // if start < end, then make AddressSet
+            AddressSet addressSet = null;
+            if (startAddress.compareTo(endAddress) <= 0){
+                addressSet = new AddressSet(startAddress, endAddress);
+            }
+            else {
+                Address minAddress = getFunctionContaining(endAddress).getBody().getMinAddress();
+                Reference[] refs = getReferencesTo(minAddress);
+                for (Reference ref : refs) {
+                    if (ref.getReferenceType().isCall()) {
+                        if (getFunctionContaining(ref.getFromAddress()).equals(getFunctionContaining(startAddress))){
+                            addressSet = new AddressSet(startAddress, ref.getFromAddress());
+                        }
+                    }
+                }
+            }
+            if (addressSet == null) {
+                return null;
+            }
+            // println(addressSet.toString());
             InstructionIterator instructions = listing.getInstructions(addressSet, true);
-            HashMap<Address, List<Scalar>> hashCandidates = new HashMap<>();
+            HashMap<Address, Set<Scalar>> hashCandidates = new HashMap<>();
             while(instructions.hasNext()) {
                 Instruction instr = instructions.next();
                 Address currentAddress = instr.getMinAddress();
@@ -264,10 +307,10 @@ public class Emulate extends GhidraScript {
                     // println("CMP: " + currentAddress.toString());
                     for (int i = 0; i < numOperands; i++){
                         // may getOperandValues return null
-                        List<Scalar> scalars = getOperandValues(instr, i);
+                        List<ScalarWithAddress> scalars = getOperandValues(instr, i);
                         if (scalars == null) continue;
-                        for (Scalar scalar : scalars) {
-                            addScalarToMap(currentAddress, scalar, hashCandidates);
+                        for (ScalarWithAddress scalar : scalars) {
+                            addScalarToMap(scalar.getAddress(), scalar.getScalar(), hashCandidates);
                         }
                     }
                 }
@@ -317,29 +360,55 @@ public class Emulate extends GhidraScript {
             this.regAtStart = registerName;
         }
 
-        private boolean checkMatchHashCandidates(String apiName, HashMap<Address, List<Scalar>> hashCandidates) {
+        private boolean checkMatchHashCandidates(String apiName, HashMap<Address, Set<Scalar>> hashCandidates) {
             boolean hashFound = false;
             String regName = null;
-            Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
-            long startTime = System.currentTimeMillis();
+            // Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
+            long startTime = System.nanoTime();
+            // Function foundFunction = null;
             
             emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
             Address stringAddress = toAddr(0xa00000);           
             emu.writeMemoryValue(stringAddress, 0x32, 0x00);
             emu.writeMemory(stringAddress, apiName.getBytes());        
             emu.writeRegister(regAtStart, stringAddress.getOffset());
-            
+
             while(!monitor.isCancelled()) {
-                long elapsedTime = System.currentTimeMillis() - startTime;
-                if (elapsedTime > 10000) {
+                long elapsedTime = System.nanoTime() - startTime;
+                if (elapsedTime > 10000000000L) {
                     println("timeout, cannot identify range of Hashing");
                     this.timeout = true;
                     return false;
                 }
                 currentAddress = emu.getExecutionAddress();
+
+                // If hashFound is true, execute until retAddress and check if EAX matches the hash.
+                // If hashFound is false and retAddress is reached, it means the hash was not found, so exit.
+                // if (currentAddress.toString().equals(retAddress.toString())) {
+                //     if (hashFound) {
+                //         if (emu.readRegister("EAX").equals(this.hash)) {
+                //             this.endAddressOfHashing = currentAddress;
+                //         }
+                //         return true;
+                //     }
+                //     return false;
+                // }
+                if (getInstructionAt(currentAddress).getMnemonicString().equals("RET")) {
+                    if (this.startFunction.getBody().contains(currentAddress)) {
+                        return false;
+                    }
+                    else if (hashFound) {
+                        if (emu.readRegister("EAX").equals(this.hash)) {
+                            this.endAddressOfHashing = currentAddress;
+                        }
+                        return true;
+                    }
+                }
+
                 if (!hashFound) {
                     // println("current: " + currentAddress.toString());
                     Instruction instr = getInstructionAt(currentAddress);
+                    println("now: " + instr.toString() + "@" + currentAddress.toString());
                     int numOperands = instr.getNumOperands();
                     for (int i=0; i<numOperands; i++) {
                         if(OperandType.isRegister(instr.getOperandType(i))) {
@@ -349,27 +418,17 @@ public class Emulate extends GhidraScript {
                                 println("[+] First Emulation, result equals hashCandidate: 0x" + this.hash.toString(16) + " -> address: " + currentAddress);
                                 this.regStoredHash = regName;
                                 this.endAddressOfHashing = currentAddress;
-                                retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
+                                // foundFunction = getFunctionContaining(currentAddress);
+                                // retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
                                 hashFound = true;
                                 break;
                             }
                         }    
                     }
                 }
-
+                
+                // if found address is existed in start function
                 if (hashFound && this.startFunction.getBody().contains(currentAddress)) return true;
-
-                // If hashFound is true, execute until retAddress and check if EAX matches the hash.
-                // If hashFound is false and retAddress is reached, it means the hash was not found, so exit.
-                if (currentAddress.toString().equals(retAddress.toString())) {
-                    if (hashFound) {
-                        if (emu.readRegister("EAX").equals(this.hash)) {
-                            this.endAddressOfHashing = currentAddress;
-                        }
-                        return true;
-                    }
-                    return false;
-                }
                 
                 try {
                     emu.step(monitor);
@@ -381,12 +440,15 @@ public class Emulate extends GhidraScript {
             return false;
         }
 
-        private void identifyRangeOfHashing(List<String> apiNames, HashMap<Address, List<Scalar>> hashCandidates) {
+        private void identifyRangeOfHashing(List<String> apiNames, HashMap<Address, Set<Scalar>> hashCandidates) {
             // long startTime = System.currentTimeMillis();
+            monitor.initialize(apiNames.size());
+            monitor.setMessage("Identyfing range of hashing...");
             for (String apiName : apiNames) {
                 if (checkMatchHashCandidates(apiName, hashCandidates)) {
                     break;
                 }
+                monitor.incrementProgress();
             }
             
             // println("start: " + this.startAddress.toString());
@@ -451,8 +513,14 @@ public class Emulate extends GhidraScript {
             emu.writeMemoryValue(stringAddress, 0x32, 0x00);
             emu.writeMemory(stringAddress, apiName.getBytes());
             emu.writeRegister(regAtStart, stringAddress.getOffset());
-
+            long startTime = System.nanoTime();
             while(!monitor.isCancelled()) {
+                long elapsedTime = System.nanoTime() - startTime;
+                if (elapsedTime > 10000000000L) {
+                    println("timeout, cannot caliculate hash value for " + apiName);
+                    return null;
+                }
+
                 currentAddress = emu.getExecutionAddress();
 
                 if (emu.getEmulateExecutionState() != EmulateExecutionState.BREAKPOINT) {
@@ -520,7 +588,7 @@ public class Emulate extends GhidraScript {
 
     public class DllFunctionLoader {
         private HashMap<String, List<String>> dllFunctions;
-    
+
         public DllFunctionLoader(String jsonFilePath) {
             Gson gson = new Gson();
             Type hashMapType = new TypeToken<HashMap<String, List<String>>>() {}.getType();
@@ -541,6 +609,14 @@ public class Emulate extends GhidraScript {
     
         public HashMap<String, List<String>> getAllDllFunctions() {
             return dllFunctions;
+        }
+
+        public int getTotalFunctionCount() {
+            int count = 0;
+            for (String dll : dllFunctions.keySet()) {
+                count += dllFunctions.get(dll).size();
+            }
+            return count;
         }
     }
 
@@ -572,9 +648,9 @@ public class Emulate extends GhidraScript {
         println("[+] readNameAddress: " + readNameAddress.toString());
         println("[+] readAddrAddress: " + readAddrAddress.toString());
         
-        /* search hash candidates */
+        /* search hash candidates */   
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
-        HashMap<Address, List<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readNameAddress, readAddrAddress);
+        HashMap<Address, Set<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readNameAddress, readAddrAddress);
         if (hashCandidates.isEmpty()) {
             throw new RuntimeException("No hash candidates found.");
         }
@@ -586,7 +662,6 @@ public class Emulate extends GhidraScript {
             }
         }
         println("[+] hashCandidates: " + Arrays.toString(candidates.toArray()));
-
 
         /* analyze memory-access instruction */
         insAnalyzer = new InstructionAnalyzer(this);
@@ -616,11 +691,21 @@ public class Emulate extends GhidraScript {
         /* caliculate hashDB */
         println("[+] now caliculating hash values...");
         HashMap<String, BigInteger> hashDB = new HashMap<>();
-        for (String dll: loader.getDllNames()) {
+        Set<String> dllNames = loader.getDllNames();
+        monitor.initialize(loader.getTotalFunctionCount());
+        monitor.setMessage("Creating DB ...");
+        for (String dll: dllNames) {
+            if (monitor.isCancelled()) {
+                break;
+            }
+
             for (String api: loader.getFunctions(dll)) {
                 BigInteger hash = emuManager.caliculateHashValue(api);
-                hashDB.put(api, hash);
+                if (hash != null) hashDB.put(api, hash);
+                // println("[+] API: " + api + " -> hash: 0x" + hash.toString(16));
+                monitor.incrementProgress();            
             }
+
         }
         String dbPath = currentPath + separator + "out" + separator + "db" + separator + fileName + ".json";
         Path dbOutputPath = Paths.get(dbPath);
@@ -634,7 +719,7 @@ public class Emulate extends GhidraScript {
 
     }
 
-    public boolean checkHash(EmulatorHelper emu, String reg, HashMap<Address, List<Scalar>> candidates) {
+    public boolean checkHash(EmulatorHelper emu, String reg, HashMap<Address, Set<Scalar>> candidates) {
         BigInteger result = emu.readRegister(reg);
         for (Address addr : candidates.keySet()) {
             for (Scalar scalar : candidates.get(addr)) {
@@ -649,10 +734,10 @@ public class Emulate extends GhidraScript {
         return false;
     }
 
-    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, List<Scalar>> hashCandidates, String outputFilePath) {
+    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, Set<Scalar>> hashCandidates, String outputFilePath) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
             for (Address addr : hashCandidates.keySet()) {
-                List<Scalar> scalars = hashCandidates.get(addr);
+                Set<Scalar> scalars = hashCandidates.get(addr);
                 for (Scalar scalar : scalars) {
                     BigInteger scalarValue = BigInteger.valueOf(scalar.getUnsignedValue());
                     writeMatchingAPIs(hashDB, addr, scalarValue, writer);
