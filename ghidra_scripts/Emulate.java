@@ -91,12 +91,24 @@ public class Emulate extends GhidraScript {
 
             if (ref != null && ref.isMemoryReference()) {
                 Address toAddr = ref.getToAddress();
-                Data data = this.program.getListing().getDefinedDataAt(toAddr);
-                Scalar scalar = getScalarFromData(data);
-                if (scalar != null) {
-                    if (scalar.getValue() > 0)
+                Iterator<Data> dataIterator = this.program.getListing().getData(toAddr, true);
+
+                while (dataIterator.hasNext()) {
+                    Data data = dataIterator.next();
+                    Scalar scalar = getScalarFromData(data);
+                    if (scalar != null) {
+                        // excluding 0xff, 0x1
+                        if (scalar.getValue() < 0 || scalar.bitLength() != 32) break;
+                        println("scalar: " + scalar.toString());
                         scalarList.add(new ScalarWithAddress(scalar, toAddr));
+                    }
                 }
+                // Data data = this.program.getListing().getDefinedDataAt(toAddr);
+                // Scalar scalar = getScalarFromData(data);
+                // if (scalar != null) {
+                //     if (scalar.getValue() > 0)
+                //         scalarList.add(new ScalarWithAddress(scalar, toAddr));
+                // }
             }
             return scalarList;
         }
@@ -243,8 +255,9 @@ public class Emulate extends GhidraScript {
                     Data data = dataIterator.next();
                     Scalar scalar = getScalarFromData(data);
                     if (scalar != null) {
-                        if (scalar.getValue() == 0) break;
-                        // if (scalar.getValue() > 0)
+                        // excluding 0xff, 0x1
+                        if (scalar.getValue() < 0 || scalar.bitLength() != 32) break;
+                        println("scalar: " + scalar.toString());
                         scalarList.add(new ScalarWithAddress(scalar, toAddr));
                     }
                 }
