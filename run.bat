@@ -38,8 +38,8 @@ for %%f in (%PROJECT_DIR%\samples\*) do (
     cmake --build %CLIENT_DIR%\build
     %DYMAORIO_DIR%\bin32\drrun.exe -follow_children -c %CLIENT_DIR%\build\Debug\dr_client.dll -- %%f
 
-    timeout /t 1
-
+    timeout /t 5
+    
     cd %PROJECT_DIR%
     set GHIDRA_PATH=C:\Tools\ghidra_11.1.2_PUBLIC\support\analyzeHeadless.bat
     set REPO_NAME=ghidra_repo

@@ -128,7 +128,8 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
     if (opnd_is_reg(opnd) && reg_is_gpr(opnd_get_reg(opnd))) {
         /* OPND is register, check if it contains name offset for found DLL */
         reg_t val = reg_get_value(opnd_get_reg(opnd), mc);
-        if ((DWORD)val >= tree->name_RVA_first && (DWORD)val <= tree->name_RVA_last) {
+        // if ((DWORD)val >= tree->name_RVA_first && (DWORD)val <= tree->name_RVA_last) {
+        if ((DWORD)val >= *(tree->AddressOfNames) && (DWORD)val <= *(tree->AddressOfNames) + tree->NumberOfFunctions) {
             store_pc((DWORD)pc, false);
             write_to_json();
             // display_api_name(tree, val, pc);
@@ -143,11 +144,10 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
         int disp = opnd_get_disp(opnd);
         if (!base_val && !index_val) return false;
 
-        DWORD val = *(PDWORD)(base_val + index_val * scale + disp);
-        if (val >= tree->name_RVA_first && val <= tree->name_RVA_last) {
+        DWORD val = base_val + index_val * scale + disp;
+        if (val >= *(tree->AddressOfNames) && val <= *(tree->AddressOfNames) + tree->NumberOfFunctions) {
             store_pc((DWORD)pc, false);
             write_to_json();
-            // display_api_name(tree, val, pc);
             return true;
         }
     }
