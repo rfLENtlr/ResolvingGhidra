@@ -147,7 +147,9 @@ public class Emulate extends GhidraScript {
         }
 
         private boolean isParameterVarnode(Varnode var) {
-            String varName = var.getHigh().getName();
+            HighVariable highVar = var.getHigh();
+            if (highVar == null) return false;
+            String varName = highVar.getName();
             // println("varName: " + varName);
             return varName.startsWith("param");
         }
@@ -318,6 +320,31 @@ public class Emulate extends GhidraScript {
 
             return hashCandidates;
         }
+
+        public HashMap<Address, Set<Scalar>> analyzeAllInstructions() {
+            Listing listing = this.program.getListing();
+            InstructionIterator instructions = listing.getInstructions(true);
+            HashMap<Address, Set<Scalar>> hashCandidates = new HashMap<>();
+
+            while (instructions.hasNext()) {
+                if (monitor.isCancelled()) {
+                    break;
+                }
+
+                Instruction instruction = instructions.next();
+                PcodeOp[] pcodeOps = instruction.getPcode();
+
+                for (PcodeOp pcodeOp : pcodeOps) {
+                    for (Varnode input : pcodeOp.getInputs()) {
+                        if (input.isConstant() && input.getSize() == 4) {
+                            Scalar scalar = new Scalar(input.getSize() * 8, input.getOffset());
+                            addScalarToMap(instruction.getMinAddress(), scalar, hashCandidates);
+                        }
+                    }
+                }
+            }
+            return hashCandidates;
+        } 
     }
 
     public class EmulationManager {
@@ -361,11 +388,13 @@ public class Emulate extends GhidraScript {
         }
 
         private boolean checkMatchHashCandidates(String apiName, HashMap<Address, Set<Scalar>> hashCandidates) {
+            println("[*] Checking hash candidates for: " + apiName);
             boolean hashFound = false;
             String regName = null;
-            // Address retAddress = getFunctionContaining(startAddress).getBody().getMaxAddress();
+            // Address retAddress = getzFunctionContaining(startAddress).getBody().getMaxAddress();
             long startTime = System.nanoTime();
-            // Function foundFunction = null;
+            Function foundFunction = null;
+            Address preAddress = readMemAddress;
             
             emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
             Address stringAddress = toAddr(0xa00000);           
@@ -382,49 +411,42 @@ public class Emulate extends GhidraScript {
                 }
                 currentAddress = emu.getExecutionAddress();
 
-                // If hashFound is true, execute until retAddress and check if EAX matches the hash.
-                // If hashFound is false and retAddress is reached, it means the hash was not found, so exit.
-                // if (currentAddress.toString().equals(retAddress.toString())) {
-                //     if (hashFound) {
-                //         if (emu.readRegister("EAX").equals(this.hash)) {
-                //             this.endAddressOfHashing = currentAddress;
-                //         }
-                //         return true;
-                //     }
-                //     return false;
-                // }
                 if (getInstructionAt(currentAddress).getMnemonicString().equals("RET")) {
                     if (this.startFunction.getBody().contains(currentAddress)) {
                         return false;
                     }
                     else if (hashFound) {
-                        if (emu.readRegister("EAX").equals(this.hash)) {
+                        if (foundFunction.getBody().contains(currentAddress) && emu.readRegister("EAX").equals(this.hash)) {
+                            this.regStoredHash = "EAX";
                             this.endAddressOfHashing = currentAddress;
                         }
                         return true;
-                    }
+                    }               
                 }
 
                 if (!hashFound) {
                     // println("current: " + currentAddress.toString());
-                    Instruction instr = getInstructionAt(currentAddress);
-                    println("now: " + instr.toString() + "@" + currentAddress.toString());
-                    int numOperands = instr.getNumOperands();
-                    for (int i=0; i<numOperands; i++) {
-                        if(OperandType.isRegister(instr.getOperandType(i))) {
-                            regName = instr.getDefaultOperandRepresentation(i);
+                    Instruction instr = getInstructionAt(preAddress);
+                    // println("now: " + instr.toString() + "@" + currentAddress.toString());
+                    // int numOperands = instr.getNumOperands();
+                    // for (int i=0; i<numOperands; i++) {
+                        if(OperandType.isRegister(instr.getOperandType(0))) {
+                            // println("now: " + instr.toString() + "@" + currentAddress.toString());
+                            regName = instr.getDefaultOperandRepresentation(0);
                             if (checkHash(emu, regName, hashCandidates)) {
                                 this.hash = emu.readRegister(regName);
                                 println("[+] First Emulation, result equals hashCandidate: 0x" + this.hash.toString(16) + " -> address: " + currentAddress);
                                 this.regStoredHash = regName;
+                                println("regStoredHash: " + this.regStoredHash);
                                 this.endAddressOfHashing = currentAddress;
-                                // foundFunction = getFunctionContaining(currentAddress);
+                                foundFunction = getFunctionContaining(currentAddress);
                                 // retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
                                 hashFound = true;
-                                break;
+                                // break;
                             }
                         }    
-                    }
+                    // }
+                    preAddress = currentAddress;
                 }
                 
                 // if found address is existed in start function
@@ -652,7 +674,8 @@ public class Emulate extends GhidraScript {
         hashvaluesAnalyzer hashAnalyzer = new hashvaluesAnalyzer(currentProgram);
         HashMap<Address, Set<Scalar>> hashCandidates = hashAnalyzer.analyzeInstructions(readNameAddress, readAddrAddress);
         if (hashCandidates.isEmpty()) {
-            throw new RuntimeException("No hash candidates found.");
+            hashCandidates = hashAnalyzer.analyzeAllInstructions();
+            if (hashCandidates.isEmpty()) throw new RuntimeException("No hash candidates found.");
         }
 
         List<String> candidates = new ArrayList<String>();
@@ -724,8 +747,10 @@ public class Emulate extends GhidraScript {
         for (Address addr : candidates.keySet()) {
             for (Scalar scalar : candidates.get(addr)) {
                 // long to BigInteger
-                BigInteger hashValue = BigInteger.valueOf(scalar.getValue());
+                BigInteger hashValue = BigInteger.valueOf(scalar.getUnsignedValue());
+                // println("result: " + result.toString(16) + " -> " + hashValue.toString(16) + "@" + emu.getExecutionAddress());
                 if (result.equals(hashValue)) {
+                    // println("match! " + result.toString(16) + " -> " + hashValue.toString(16));
                     return true;
                 }
             }

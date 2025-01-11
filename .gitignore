@@ -45,3 +45,5 @@ ghidra_repo.rep/
 ghidra_repo.gpr
 ghidra_repo.lock
 ghidra_repo.lock~
+
+dlls/count.py
