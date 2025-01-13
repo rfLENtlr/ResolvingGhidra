@@ -128,12 +128,17 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
     if (opnd_is_reg(opnd) && reg_is_gpr(opnd_get_reg(opnd))) {
         /* OPND is register, check if it contains name offset for found DLL */
         reg_t val = reg_get_value(opnd_get_reg(opnd), mc);
-        // if ((DWORD)val >= tree->name_RVA_first && (DWORD)val <= tree->name_RVA_last) {
-        if ((DWORD)val >= *(tree->AddressOfNames) && (DWORD)val <= *(tree->AddressOfNames) + tree->NumberOfFunctions) {
-            store_pc((DWORD)pc, false);
-            write_to_json();
-            // display_api_name(tree, val, pc);
-            return true;
+        if ((DWORD)val >= tree->AddressOfNames[0] && (DWORD)val <= tree->AddressOfNames[tree->NumberOfFunctions - 1]) {
+        // if ((DWORD)val >= *(tree->AddressOfNames) && (DWORD)val <= *(tree->AddressOfNames) + tree->NumberOfFunctions) {
+            /* Confirm if the value in range is a valid offset */
+            for (DWORD j = 0; j < tree->NumberOfNames; j++) {
+                if (val == tree->AddressOfNames[j]) {
+                    store_pc((DWORD)pc, false);
+                    write_to_json();
+                    dr_printf("API: %s\n", (char*)(tree->start_addr + val));
+                    return true;
+                }
+            }
         }
     }
     if (opnd_is_base_disp(opnd)) {

@@ -83,32 +83,31 @@ static void module_load_event_callback(void *drcontext, const module_data_t *mod
     PIMAGE_EXPORT_DIRECTORY exportDir_VA = (PIMAGE_EXPORT_DIRECTORY)((DWORD_PTR)mod->preferred_base + exportDir_RVA);
     /* Traverse the export table */
     DWORD numberOfFunctions = exportDir_VA->NumberOfFunctions;
+    DWORD numberOfNames = exportDir_VA->NumberOfNames;
     PDWORD addressOfFunctions_RVA = (PDWORD)((DWORD_PTR)mod->preferred_base + exportDir_VA->AddressOfFunctions);
     PDWORD addressOfNames_RVA = (PDWORD)((DWORD_PTR)mod->preferred_base + exportDir_VA->AddressOfNames);
     PWORD addressOfNameOrdinals_RVA = (PWORD)((DWORD_PTR)mod->preferred_base + exportDir_VA->AddressOfNameOrdinals);
 
-    DWORD minValue = addressOfNames_RVA[0];
-    DWORD maxValue = addressOfNames_RVA[0];
-    for (DWORD i = 1; i < numberOfFunctions; i++) {
-        DWORD value = addressOfNames_RVA[i];
-        if (value < minValue) {
-            minValue = value;
-        }
-        if (value > maxValue) {
-            maxValue = value;
-        }
-    }
-    // DWORD name_RVA_first = addressOfNames_RVA[0];
-    // DWORD name_RVA_last = addressOfNames_RVA[numberOfFunctions-1];
-    dr_printf("[%s]\n", img_name_lwr);
-    dr_printf("addr 0x%X to 0x%X\n\n", minValue, maxValue);
+    // DWORD minValue = addressOfNames_RVA[0];
+    // DWORD maxValue = addressOfNames_RVA[0];
+    // for (DWORD i = 1; i < numberOfFunctions; i++) {
+    //     DWORD value = addressOfNames_RVA[i];
+    //     if (value < minValue) {
+    //         minValue = value;
+    //     }
+    //     if (value > maxValue) {
+    //         maxValue = value;
+    //     }
+    // }
+    // dr_printf("[%s]\n", img_name_lwr);
+    // dr_printf("addr 0x%X to 0x%X\n\n", minValue, maxValue);
     
 
     /* Update/init the interval tree */
     if (itree == NULL)
-        itree = itree_init(mod->start, mod->end - 1, img_name_lwr, numberOfFunctions, addressOfFunctions_RVA, addressOfNames_RVA, addressOfNameOrdinals_RVA, minValue, maxValue);
+        itree = itree_init(mod->start, mod->end - 1, img_name_lwr, numberOfFunctions, numberOfNames, addressOfFunctions_RVA, addressOfNames_RVA, addressOfNameOrdinals_RVA);
     else
-        itree_insert(itree, mod->start, mod->end - 1, img_name_lwr, numberOfFunctions, addressOfFunctions_RVA, addressOfNames_RVA, addressOfNameOrdinals_RVA, minValue, maxValue);
+        itree_insert(itree, mod->start, mod->end - 1, img_name_lwr, numberOfFunctions, numberOfNames, addressOfFunctions_RVA, addressOfNames_RVA, addressOfNameOrdinals_RVA);
 
     free((void *)img_name_lwr);
 }

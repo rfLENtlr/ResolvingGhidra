@@ -8,7 +8,7 @@
 /* Global reference to the interval tree */
 itreenode_t *itree;
 
-itreenode_t *itree_init(app_pc start_addr, app_pc end_addr, char *img_name, DWORD NumberOfFunctions, PDWORD AddressOfFunctions, PDWORD AddressOfNames, PWORD AddressOfNameOrdinals, DWORD name_RVA_first, DWORD name_RVA_last)
+itreenode_t *itree_init(app_pc start_addr, app_pc end_addr, char *img_name, DWORD NumberOfFunctions, DWORD NumberOfNames, PDWORD AddressOfFunctions, PDWORD AddressOfNames, PWORD AddressOfNameOrdinals)
 {
     itreenode_t *tree = (itreenode_t *)malloc(sizeof(itreenode_t));
     if (tree == NULL) DR_ASSERT_MSG(false, "Failed to initialize intervcal tree");
@@ -20,16 +20,14 @@ itreenode_t *itree_init(app_pc start_addr, app_pc end_addr, char *img_name, DWOR
     tree->right = NULL;
     tree->img_name = _strdup(img_name);
     tree->NumberOfFunctions = NumberOfFunctions;
+    tree->NumberOfNames = NumberOfNames;
     tree->AddressOfFunctions = AddressOfFunctions;
     tree->AddressOfNames = AddressOfNames;
     tree->AddressOfNameOrdinals = AddressOfNameOrdinals;
-    tree->name_RVA_first = name_RVA_first;
-    tree->name_RVA_last = name_RVA_last;
-    
     return tree;
 }
 
-bool itree_insert(itreenode_t *tree, app_pc start_addr, app_pc end_addr, char *img_name, DWORD NumberOfFunctions, PDWORD AddressOfFunctions, PDWORD AddressOfNames, PWORD AddressOfNameOrdinals, DWORD name_RVA_first, DWORD name_RVA_last)
+bool itree_insert(itreenode_t *tree, app_pc start_addr, app_pc end_addr, char *img_name, DWORD NumberOfFunctions, DWORD NumberOfNames, PDWORD AddressOfFunctions, PDWORD AddressOfNames, PWORD AddressOfNameOrdinals)
 {
     itreenode_t *temp = tree;
 
@@ -38,20 +36,20 @@ bool itree_insert(itreenode_t *tree, app_pc start_addr, app_pc end_addr, char *i
     else if (temp->end_addr < start_addr) /* Insert in right subtree */
     {
         if (temp->right) /* Right subtree persent */
-            return itree_insert(temp->right, start_addr, end_addr, img_name, NumberOfFunctions, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals, name_RVA_first, name_RVA_last);
+            return itree_insert(temp->right, start_addr, end_addr, img_name, NumberOfFunctions, NumberOfNames, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals);
         else /* Right subtree NOT present */
         {
-            temp->right = itree_init(start_addr, end_addr, img_name, NumberOfFunctions, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals, name_RVA_first, name_RVA_last);
+            temp->right = itree_init(start_addr, end_addr, img_name, NumberOfFunctions, NumberOfNames, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals);
             return true;
         }
     }
     else /* Insert in left subtree */
     {
         if (temp->left) /* Left subtree persent */
-            return itree_insert(temp->left, start_addr, end_addr, img_name, NumberOfFunctions, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals, name_RVA_first, name_RVA_last);
+            return itree_insert(temp->left, start_addr, end_addr, img_name, NumberOfFunctions, NumberOfNames, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals);
         else /* Left subtree NOT present */
         {
-            temp->left = itree_init(start_addr, end_addr, img_name, NumberOfFunctions, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals, name_RVA_first, name_RVA_last);
+            temp->left = itree_init(start_addr, end_addr, img_name, NumberOfFunctions, NumberOfNames, AddressOfFunctions, AddressOfNames, AddressOfNameOrdinals);
             return true;
         }
     }
@@ -80,26 +78,26 @@ itreenode_t *check_DllBaseAddress(itreenode_t *tree, app_pc address)
     return NULL;
 }
 
-itreenode_t *check_AddressOfNames(itreenode_t *tree, DWORD offset)
-{
-    if (!tree) return NULL;
-    itreenode_t *temp = tree;
+// itreenode_t *check_AddressOfNames(itreenode_t *tree, DWORD offset)
+// {
+//     if (!tree) return NULL;
+//     itreenode_t *temp = tree;
     
-    if (offset >= temp->name_RVA_first && offset <= temp->name_RVA_last)
-        return temp;
-    else if (temp->name_RVA_first < offset)
-        if (temp->right)
-            return check_AddressOfNames(temp->right, offset);
-        else
-            return NULL;
-    else 
-        if (temp->left)
-            return check_AddressOfNames(temp->left, offset);
-        else
-            return NULL;
+//     if (offset >= temp->name_RVA_first && offset <= temp->name_RVA_last)
+//         return temp;
+//     else if (temp->name_RVA_first < offset)
+//         if (temp->right)
+//             return check_AddressOfNames(temp->right, offset);
+//         else
+//             return NULL;
+//     else 
+//         if (temp->left)
+//             return check_AddressOfNames(temp->left, offset);
+//         else
+//             return NULL;
     
-    return NULL;
-}
+//     return NULL;
+// }
 
 itreenode_t *itree_search(itreenode_t *tree, PDWORD value, SearchAddress field)
 {

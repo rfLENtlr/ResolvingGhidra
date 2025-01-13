@@ -738,6 +738,7 @@ public class Emulate extends GhidraScript {
             for (String api: loader.getFunctions(dll)) {
                 BigInteger hash = emuManager.caliculateHashValue(api);
                 if (hash != null) hashDB.put(api, hash);
+                else println("[!] hash of "+ api + "cannot be caliculated...");
                 // println("[+] API: " + api + " -> hash: 0x" + hash.toString(16));
                 monitor.incrementProgress();            
             }
