@@ -374,7 +374,7 @@ public class Emulate extends GhidraScript {
         private boolean timeout;
 
         public EmulationManager(Program program, Address readMemAddress) {
-            this.emu = new EmulatorHelper(program);
+            // this.emu = new EmulatorHelper(program);
             this.program = program;
             this.readMemAddress = readMemAddress;
             this.startAddress = getInstructionAt(readMemAddress).getNext().getAddress();
@@ -383,13 +383,16 @@ public class Emulate extends GhidraScript {
             this.hash = null;
             this.timeout = false;
             this.startFunction = getFunctionContaining(readMemAddress);
-
+            initializeEmulator();
             analyzeRegAtStart();
         }
 
         private void initializeEmulator() {
-            this.emu.dispose();
+            if (this.emu != null) this.emu.dispose();
             this.emu = new EmulatorHelper(this.program);
+            int regSize = this.emu.getStackPointerRegister().getBitLength();
+            Address stackAddress = toAddr((((1 << (regSize - 1)) - 1) ^ ((1 << (regSize/2)) - 1)));
+            emu.writeRegister(emu.getStackPointerRegister(), stackAddress.getOffset());
         }
 
         private void analyzeRegAtStart() {
