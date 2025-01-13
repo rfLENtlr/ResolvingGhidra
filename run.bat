@@ -29,8 +29,15 @@ IF NOT EXIST "out\db" (
     del /q "out\db\*"
 )
 
+IF NOT EXIST "out\ghidra" (
+    mkdir out\db
+) ELSE (
+    del /q "out\ghidra\*"
+)
+
 for %%f in (%PROJECT_DIR%\samples\*) do (
     echo now analyzing : %%f
+    set FILENAME=%%~nf
 
     cd %CLIENT_DIR%\build
     cmake -DDynamoRIO_DIR=%DYMAORIO_DIR%\cmake\ ..
@@ -45,8 +52,9 @@ for %%f in (%PROJECT_DIR%\samples\*) do (
     set REPO_NAME=ghidra_repo
     set SCRIPT_PATH=ghidra_scripts
     set SCRIPT_NAME=Emulate.java
+    set SCRIPT_LOG=%PROJECT_DIR%\out\ghidra\%FILENAME%.log
 
-    %GHIDRA_PATH% %PROJECT_DIR% %REPO_NAME% -import %%f -overwrite -scriptPath %SCRIPT_PATH% -postScript %SCRIPT_NAME% -max-cpu 4
+    %GHIDRA_PATH% %PROJECT_DIR% %REPO_NAME% -import %%f -overwrite -scriptPath %SCRIPT_PATH% -postScript %SCRIPT_NAME% -max-cpu 8 -scriptlog %SCRIPT_LOG%
 )
 
 pause
