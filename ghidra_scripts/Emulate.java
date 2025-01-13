@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
@@ -726,7 +727,7 @@ public class Emulate extends GhidraScript {
         
         /* caliculate hashDB */
         println("[+] now caliculating hash values...");
-        HashMap<String, BigInteger> hashDB = new HashMap<>();
+        HashMap<String, HashMap<String, BigInteger>> hashDB = new HashMap<>();
         Set<String> dllNames = loader.getDllNames();
         monitor.initialize(loader.getTotalFunctionCount());
         monitor.setMessage("Creating DB ...");
@@ -735,14 +736,16 @@ public class Emulate extends GhidraScript {
                 break;
             }
 
+            HashMap<String, BigInteger> apiHashes = new HashMap<>();
             for (String api: loader.getFunctions(dll)) {
                 BigInteger hash = emuManager.caliculateHashValue(api);
-                if (hash != null) hashDB.put(api, hash);
+                // if (hash != null) hashDB.put(api, hash);
+                if (hash != null) apiHashes.put(api, hash);
                 else println("[!] hash of "+ api + "cannot be caliculated...");
                 // println("[+] API: " + api + " -> hash: 0x" + hash.toString(16));
                 monitor.incrementProgress();            
             }
-
+            hashDB.put(dll, apiHashes);
         }
         String dbPath = currentPath + separator + "out" + separator + "db" + separator + fileName + ".json";
         Path dbOutputPath = Paths.get(dbPath);
@@ -773,7 +776,7 @@ public class Emulate extends GhidraScript {
         return false;
     }
 
-    public void searchHashValues(HashMap<String, BigInteger> hashDB, HashMap<Address, Set<Scalar>> hashCandidates, String outputFilePath) {
+    public void searchHashValues(HashMap<String, HashMap<String, BigInteger>> hashDB, HashMap<Address, Set<Scalar>> hashCandidates, String outputFilePath) {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFilePath))) {
             for (Address addr : hashCandidates.keySet()) {
                 Set<Scalar> scalars = hashCandidates.get(addr);
@@ -788,37 +791,53 @@ public class Emulate extends GhidraScript {
         }
     }
 
-    private void writeMatchingAPIs(HashMap<String, BigInteger> hashDB, Address addr, BigInteger scalarValue, BufferedWriter writer) throws IOException {
-        for (String api : hashDB.keySet()) {
-            BigInteger hashValue = hashDB.get(api);
-            if (!hashValue.equals(scalarValue)) {
-                continue;
+    private void writeMatchingAPIs(HashMap<String, HashMap<String, BigInteger>> hashDB, Address addr, BigInteger scalarValue, BufferedWriter writer) throws IOException {
+        for (String dll : hashDB.keySet()) {
+            HashMap<String, BigInteger> apiHashes = hashDB.get(dll);
+            for (String api : apiHashes.keySet()) {
+                BigInteger hashValue = apiHashes.get(api);
+                if (!hashValue.equals(scalarValue)) {
+                    continue;
+                }
+                String output = "[+] API: " + api + " @ " + dll + "-> hash: 0x" + hashValue.toString(16) + " -> Address: " + addr;
+                println(output);
+                writer.write(output + "\n");
             }
-            String output = "[+] API: " + api + " -> hash: 0x" + hashValue.toString(16) + " -> Address: " + addr;
-            println(output);
-            writer.write(output + "\n");
         }
     }
 
-
-
-    public void writeHashDatabase(HashMap<String, BigInteger> hashDB, Path filePath) {
+    private void writeHashDatabase(HashMap<String, HashMap<String, BigInteger>> hashDB, Path dbOutputPath) {
         Gson gson = new GsonBuilder()
             .registerTypeAdapter(BigInteger.class, new JsonSerializer<BigInteger>() {
                 @Override
-                public JsonElement serialize(BigInteger src, Type typeOfSrc, JsonSerializationContext context) {
+                public JsonPrimitive serialize(BigInteger src, Type typeOfSrc, com.google.gson.JsonSerializationContext context) {
                     return new JsonPrimitive("0x" + src.toString(16));
                 }
             })
             .setPrettyPrinting()
             .create();
-        String json = gson.toJson(hashDB);
-
+        
+        JsonObject jsonObject = new JsonObject();
+    
+        for (Map.Entry<String, HashMap<String, BigInteger>> entry : hashDB.entrySet()) {
+            String dllName = entry.getKey();
+            JsonArray apiArray = new JsonArray();
+    
+            for (Map.Entry<String, BigInteger> apiEntry : entry.getValue().entrySet()) {
+                JsonObject apiObject = new JsonObject();
+                apiObject.addProperty("API", apiEntry.getKey());
+                apiObject.addProperty("Hash", "0x" + apiEntry.getValue().toString(16));
+                apiArray.add(apiObject);
+            }
+    
+            jsonObject.add(dllName, apiArray);
+        }
+    
         try {
-            Files.writeString(filePath, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            println("[*] HashDB written to: " + filePath.toAbsolutePath());
-        } catch (Exception e) {
+            Files.write(dbOutputPath, gson.toJson(jsonObject).getBytes());
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
+
 }
