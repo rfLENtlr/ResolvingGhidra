@@ -363,10 +363,10 @@ public class Emulate extends GhidraScript {
 
     public class EmulationManager {
         private EmulatorHelper emu;
+        private Program program;
         private Address startAddress;
         private Address readMemAddress;
         private Function startFunction;
-
         private Address endAddressOfHashing;
         private String regAtStart;
         private String regStoredHash;
@@ -375,6 +375,7 @@ public class Emulate extends GhidraScript {
 
         public EmulationManager(Program program, Address readMemAddress) {
             this.emu = new EmulatorHelper(program);
+            this.program = program;
             this.readMemAddress = readMemAddress;
             this.startAddress = getInstructionAt(readMemAddress).getNext().getAddress();
             this.endAddressOfHashing = null;
@@ -384,6 +385,11 @@ public class Emulate extends GhidraScript {
             this.startFunction = getFunctionContaining(readMemAddress);
 
             analyzeRegAtStart();
+        }
+
+        private void initializeEmulator() {
+            this.emu.dispose();
+            this.emu = new EmulatorHelper(this.program);
         }
 
         private void analyzeRegAtStart() {
@@ -410,6 +416,7 @@ public class Emulate extends GhidraScript {
             Function foundFunction = null;
             Address preAddress = readMemAddress;
             
+
             emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
             Address stringAddress = toAddr(0xa00000);           
             emu.writeMemoryValue(stringAddress, 0x32, 0x00);
@@ -482,71 +489,23 @@ public class Emulate extends GhidraScript {
             monitor.setMessage("Identyfing range of hashing...");
             for (String apiName : apiNames) {
                 if (checkMatchHashCandidates(apiName, hashCandidates)) {
+                    initializeEmulator();
                     break;
                 }
+                initializeEmulator();
                 monitor.incrementProgress();
             }
             
-            // println("start: " + this.startAddress.toString());
-            // println("end:"+ retAddress.toString());
-            // while(!monitor.isCancelled()) {
-            //     long elapsedTime = System.currentTimeMillis() - startTime;
-            //     if (elapsedTime > 100000) {
-            //         println("timeout, cannot identify range of Hashing");
-            //         this.timeout = true;
-            //         return;
-            //     }
-            //     currentAddress = emu.getExecutionAddress();
-                
-            //     if (!hashFound) {
-            //         Instruction instr = getInstructionAt(currentAddress);
-            //         int numOperands = instr.getNumOperands();
-            //         for (int i=0; i<numOperands; i++) {
-            //             if(OperandType.isRegister(instr.getOperandType(i))) {
-            //                 regName = instr.getDefaultOperandRepresentation(i);
-            //                 if (checkHash(emu, regName, hashCandidates)) {
-            //                     this.hash = emu.readRegister(regName);
-            //                     println("[+] First Emulation, result equals hashCandidate: 0x" + this.hash.toString(16) + " -> address: " + currentAddress);
-            //                     this.regStoredHash = regName;
-            //                     this.endAddressOfHashing = currentAddress;
-            //                     retAddress = getFunctionContaining(currentAddress).getBody().getMaxAddress();
-            //                     hashFound = true;
-            //                     break;
-            //                 }
-            //             }    
-            //         }
-            //     }
-                
-            //     // println(currentAddress.toString());
-            //     if (currentAddress.toString().equals(retAddress.toString())) {
-            //         if (emu.readRegister("EAX").equals(this.hash)) {
-            //             this.endAddressOfHashing = currentAddress;
-            //         }
-            //         break;
-            //     }
-                
-
-            //     // if currentAddress doesn't reach to retAddress, or hash value is found, continue
-            //     // if (currentAddress == retAddress && hashFound) break;
-                
-            //     try {
-            //         emu.step(monitor);
-            //     } catch (CancelledException e) {
-            //         println("Emulation step was cancelled: " + e.getMessage());
-            //         break;
-            //     }
-
-            // }
         }
 
         private BigInteger caliculateHashValue(String apiName) {
-            // should set pc reg with next ins
+            initializeEmulator(); 
             BigInteger hash = null;
             emu.writeRegister(emu.getPCRegister(), startAddress.getOffset());
             emu.setBreakpoint(this.endAddressOfHashing);
 
             Address stringAddress = toAddr(0xa00000);
-            emu.writeMemoryValue(stringAddress, 0x32, 0x00);
+            emu.writeMemoryValue(stringAddress, 0x256, 0x00);
             emu.writeMemory(stringAddress, apiName.getBytes());
             emu.writeRegister(regAtStart, stringAddress.getOffset());
             long startTime = System.nanoTime();
