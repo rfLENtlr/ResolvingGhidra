@@ -770,7 +770,7 @@ public class Emulate extends GhidraScript {
             .registerTypeAdapter(BigInteger.class, new JsonSerializer<BigInteger>() {
                 @Override
                 public JsonPrimitive serialize(BigInteger src, Type typeOfSrc, com.google.gson.JsonSerializationContext context) {
-                    return new JsonPrimitive("0x" + src.toString(16));
+                    return new JsonPrimitive(String.format("0x%0" + 8 + "x", src));
                 }
             })
             .setPrettyPrinting()
@@ -785,7 +785,7 @@ public class Emulate extends GhidraScript {
             for (Map.Entry<String, BigInteger> apiEntry : entry.getValue().entrySet()) {
                 JsonObject apiObject = new JsonObject();
                 apiObject.addProperty("API", apiEntry.getKey());
-                apiObject.addProperty("Hash", "0x" + apiEntry.getValue().toString(16));
+                apiObject.addProperty("Hash", String.format("0x%0" + 8 + "x", apiEntry.getValue()));
                 apiArray.add(apiObject);
             }
     
