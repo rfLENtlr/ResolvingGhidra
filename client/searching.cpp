@@ -3,6 +3,8 @@
 
 #include "dr_api.h"
 
+#include <math.h>
+
 #include "searching.h"
 #include "itree.h"
 
@@ -22,12 +24,15 @@ extern int name_count;
 char logname[MAX_PATH];
 
 /* Functions declaration */
+static bool search_in_lea(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
+static bool search_in_others(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
 instr_t *decode_instruction(void *drcontext, app_pc pc); // May be moved to an utils file instead
 bool search_address_of_names(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
 itreenode_t *search_img_base(void *drcontext, app_pc pc, opnd_t opnd, dr_mcontext_t *mc);
 bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tree, dr_mcontext_t *mc);
 bool search_address_of_functions(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc);
-// void display_api_name(itreenode_t *tree, DWORD offset, app_pc pc);
+static bool search_function_address(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tree, dr_mcontext_t *mc);
+static void log_func_address(void *drcontext, itreenode_t *tree, DWORD index, app_pc pc);
 
 void write_file_init();
 void write_to_json();
@@ -48,9 +53,11 @@ void search_export_table_reference(app_pc pc)
     dr_mcontext_t mc = { sizeof(mc), DR_MC_ALL };
     dr_get_mcontext(drcontext, &mc);
 
-    if (!search_address_of_names(drcontext, instr, &mc, pc)) {
-        /* If base_addr + AddressOfNames[i] was not found, search for AddressOfFunctions[AddressOfNameOrdinals[i]] */
-        search_address_of_functions(drcontext, instr, &mc, pc);
+    if (instr_get_opcode(instr) == OP_lea) {
+        search_in_lea(drcontext, instr, &mc, pc);
+    }
+    else {
+        search_in_others(drcontext, instr, &mc, pc);
     }
 
     instr_destroy(drcontext, instr);
@@ -67,7 +74,47 @@ instr_t *decode_instruction(void *drcontext, app_pc pc)
     return instr;
 }
 
-bool search_address_of_names(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc)
+static bool search_in_lea(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc)
+{
+    //TODO: manage the case for AddressOfFunctions
+    if (instr_num_srcs(instr) <= 0) {
+        return false;
+    }
+
+    itreenode_t *tree = NULL;
+    opnd_t opnd = instr_get_src(instr, 0); // Do I need to check other dst operands with a for loop?
+
+    reg_t base_val = reg_get_value(opnd_get_base(opnd), mc);
+    reg_t index_val = reg_get_value(opnd_get_index(opnd), mc);
+    int scale = opnd_get_scale(opnd);
+    int disp = opnd_get_disp(opnd);
+
+    tree = check_DllBaseAddress(itree, (app_pc)base_val);
+    if (tree) {
+        if ((DWORD)index_val >= tree->AddressOfNames[0] && (DWORD)index_val <= tree->AddressOfNames[tree->NumberOfFunctions - 1]) {
+        // if ((DWORD)index_val >= tree->name_RVA_first && (DWORD)index_val <= tree->name_RVA_last) {
+            // log_api_name(drcontext, tree, (DWORD)index_val, pc);
+            store_pc((DWORD)pc, false);
+            write_to_json();
+            return true;
+        }
+    }
+    else {
+        tree = check_DllBaseAddress(itree, (app_pc)index_val);
+        if (tree) {
+        if ((DWORD)index_val >= tree->AddressOfNames[0] && (DWORD)index_val <= tree->AddressOfNames[tree->NumberOfFunctions - 1]) {
+            // if ((DWORD)base_val >= tree->name_RVA_first && (DWORD)base_val <= tree->name_RVA_last) {
+                // log_api_name(drcontext, tree, (DWORD)base_val, pc);
+                store_pc((DWORD)pc, false);
+                write_to_json();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool search_in_others(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc)
 {
     if (instr_num_dsts(instr) <= 0 || instr_num_srcs(instr) <= 0) {
         return false;
@@ -77,19 +124,16 @@ bool search_address_of_names(void *drcontext, instr_t *instr, dr_mcontext_t *mc,
     opnd_t opnd_dst = instr_get_dst(instr, 0); // Do I need to check other dst operands with a for loop?
     opnd_t opnd_src = instr_get_src(instr, 0);
 
-    /* 
-        Search first in the DST operand (more likely to be found here) for the DLL base address.
-        If found, check AddressOfNames[i] in the SRC operand.
-        Do the opposite if in the DST operand there's no DLL base address.
-    */
     tree = search_img_base(drcontext, pc, opnd_dst, mc);
     if (tree) {
-        return search_name_offset(drcontext, pc, opnd_src, tree, mc);
+        if (!search_name_offset(drcontext, pc, opnd_src, tree, mc))
+            search_function_address(drcontext, pc, opnd_src, tree, mc);
     }
     else {
         tree = search_img_base(drcontext, pc, opnd_src, mc);
         if (tree) {
-            return search_name_offset(drcontext, pc, opnd_dst, tree, mc);
+            if (!search_name_offset(drcontext, pc, opnd_dst, tree, mc))
+                search_function_address(drcontext, pc, opnd_dst, tree, mc);
         }
     }
     return false;
@@ -135,7 +179,7 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
                 if (val == tree->AddressOfNames[j]) {
                     store_pc((DWORD)pc, false);
                     write_to_json();
-                    dr_printf("API: %s\n", (char*)(tree->start_addr + val));
+                    // dr_printf("API: %s\n", (char*)(tree->start_addr + val));
                     return true;
                 }
             }
@@ -160,41 +204,74 @@ bool search_name_offset(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tr
     return false;
 }
 
-bool search_address_of_functions(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc)
-{
-    if (instr_num_srcs(instr) <= 0) {
-        return false;
-    }
+// bool search_address_of_functions(void *drcontext, instr_t *instr, dr_mcontext_t *mc, app_pc pc)
+// {
+    
+//     if (instr_num_srcs(instr) <= 0) {
+//         return false;
+//     }
 
-    opnd_t opnd_src = instr_get_src(instr, 0);
-    if (!opnd_is_base_disp(opnd_src)) { // opnd_is_memory_reference?
-        return false;
-    }
+//     opnd_t opnd_src = instr_get_src(instr, 0);
+//     if (!opnd_is_base_disp(opnd_src)) { // opnd_is_memory_reference?
+//         return false;
+//     }
 
-    reg_t base_val = reg_get_value(opnd_get_base(opnd_src), mc);
-    reg_t index_val = reg_get_value(opnd_get_index(opnd_src), mc);
-    int scale = opnd_get_scale(opnd_src);
-    int disp = opnd_get_disp(opnd_src);
-    if (!base_val && !index_val) return false;
+//     reg_t base_val = reg_get_value(opnd_get_base(opnd_src), mc);
+//     reg_t index_val = reg_get_value(opnd_get_index(opnd_src), mc);
+//     int scale = opnd_get_scale(opnd_src);
+//     int disp = opnd_get_disp(opnd_src);
+//     if (!base_val && !index_val) return false;
 
-    itreenode_t *tree = itree_search(itree, (PDWORD)base_val, SEARCH_ADDR_FUNCS);
-    if (tree) {
-        store_pc((DWORD)pc, true);
-        int index = 0;
-        for (DWORD i = 0; i < tree->NumberOfFunctions; i++) {
-            /* Reverse the index */
-            if (tree->AddressOfNameOrdinals[i] == index_val)
-                index = i;
-        }
+//     itreenode_t *tree = itree_search(itree, (PDWORD)base_val, SEARCH_ADDR_FUNCS);
+//     if (tree) {
+//         store_pc((DWORD)pc, true);
+//         int index = 0;
+//         for (DWORD i = 0; i < tree->NumberOfFunctions; i++) {
+//             /* Reverse the index */
+//             if (tree->AddressOfNameOrdinals[i] == index_val)
+//                 index = i;
+//         }
         
-        /* Compute the API name */
-        char *api_name = (char *)((DWORD_PTR)tree->start_addr + (DWORD)tree->AddressOfNames[index]);
-        // dr_printf(">> API-name: %s\n", api_name);
-        store_name(api_name);
-        write_to_json();
+//         /* Compute the API name */
+//         char *api_name = (char *)((DWORD_PTR)tree->start_addr + (DWORD)tree->AddressOfNames[index]);
+//         // dr_printf(">> API-name: %s\n", api_name);
+//         store_name(api_name);
+//         write_to_json();
+//     }
+
+//     return true;
+// }
+
+static bool search_function_address(void *drcontext, app_pc pc, opnd_t opnd, itreenode_t *tree, dr_mcontext_t *mc)
+{
+    if (opnd_is_reg(opnd) && reg_is_gpr(opnd_get_reg(opnd))) {
+        reg_t val = reg_get_value(opnd_get_reg(opnd), mc);
+        if (!val) return false;
+        for (DWORD j = 0; j < tree->NumberOfNames; j++) {
+            if (tree->AddressOfFunctions[tree->AddressOfNameOrdinals[j]] == val) {
+                log_func_address(drcontext, tree, j, pc);
+                return true;
+            }
+        }
+    }
+    if (opnd_is_base_disp(opnd)) {
+        reg_t base_val = reg_get_value(opnd_get_base(opnd), mc);
+        reg_t index_val = reg_get_value(opnd_get_index(opnd), mc);
+        int scale = opnd_get_scale(opnd);
+        int disp = opnd_get_disp(opnd);
+        if (!base_val && !index_val) return false;
+        DWORD val = *(PDWORD)(base_val + index_val * scale + disp);
+        if (!val) return false;        
+        for (DWORD j = 0; j < tree->NumberOfNames; j++) {
+            if (tree->AddressOfFunctions[tree->AddressOfNameOrdinals[j]] == val) {
+                log_func_address(drcontext, tree, j, pc);
+                // store_pc(pc);
+                return true;
+            }
+        }
     }
 
-    return true;
+    return false;
 }
 
 void write_file_init() {
@@ -293,4 +370,19 @@ void store_name(const char* name) {
         name_array[name_count] = _strdup(name);
         name_count++;
     }
+}
+
+static void log_func_address(void *drcontext, itreenode_t *tree, DWORD index, app_pc pc)
+{
+    /* Compute the API name */
+    char *api_name = (char *)((DWORD_PTR)tree->start_addr + (DWORD)tree->AddressOfNames[index]);
+    // LOG_PRINT("AddressOfFunctions @ %x - Name: %s, from: %s", pc, api_name, tree->img_name);
+    // DBG_PRINT(
+    //     ">> Found AddressOfFunctions (0x%x) in module %s. The instruction is at address "
+    //     "[0x%x]\n   AddressOfNameOrdinals[i]=0x%x (AddressOfNameOrdinals=0x%x), API-name: %s",
+    //     tree->AddressOfFunctions, tree->img_name, pc, tree->AddressOfNameOrdinals[index], tree->AddressOfNameOrdinals, api_name);
+    // DEBUG_INSTRUCTION(drcontext, pc);
+    store_pc((DWORD)pc, true);
+    store_name(api_name);
+    write_to_json();
 }
