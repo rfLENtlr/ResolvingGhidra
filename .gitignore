@@ -47,3 +47,5 @@ ghidra_repo.lock
 ghidra_repo.lock~
 
 dlls/count.py
+
+transform/*
